@@ -28,6 +28,8 @@ let
       set -euo pipefail
       rustc_path="$(nix-build -A rustc nix/nixpkgs-stable.nix)/bin"
       echo "$rustc_path" >> "$GITHUB_PATH"
+      # XXX debugging CI
+      ls -lR /nix/var/nix
     '';
   };
   print-path = {

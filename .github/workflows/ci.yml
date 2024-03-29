@@ -131,6 +131,8 @@ jobs:
           set -euo pipefail
           rustc_path="$(nix-build -A rustc nix/nixpkgs-stable.nix)/bin"
           echo "$rustc_path" >> "$GITHUB_PATH"
+          # XXX debugging CI
+          ls -lR /nix/var/nix
       - name: print PATH
         run: printenv PATH
       - name: Rust Cache
@@ -163,6 +165,8 @@ jobs:
           set -euo pipefail
           rustc_path="$(nix-build -A rustc nix/nixpkgs-stable.nix)/bin"
           echo "$rustc_path" >> "$GITHUB_PATH"
+          # XXX debugging CI
+          ls -lR /nix/var/nix
       - name: print PATH
         run: printenv PATH
       - name: Rust Cache
@@ -195,6 +199,8 @@ jobs:
           set -euo pipefail
           rustc_path="$(nix-build -A rustc nix/nixpkgs-stable.nix)/bin"
           echo "$rustc_path" >> "$GITHUB_PATH"
+          # XXX debugging CI
+          ls -lR /nix/var/nix
       - name: print PATH
         run: printenv PATH
       - name: Rust Cache
