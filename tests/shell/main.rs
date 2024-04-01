@@ -94,8 +94,6 @@ fn build(project: &Project, logger: &slog::Logger) -> PathBuf {
             )
             .unwrap()
             .result,
-            project::Username::from_env_var().unwrap(),
-            logger,
         )
         .unwrap()
         .shell_gc_root

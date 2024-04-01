@@ -1,15 +1,15 @@
 //! Wrap a nix file and manage corresponding state.
 
-use slog::debug;
 use thiserror::Error;
 
 use crate::builder::{OutputPath, RootedPath};
 use crate::cas::ContentAddressable;
 use crate::nix::StorePath;
 use crate::{AbsPathBuf, Installable, NixFile};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// A “project” knows how to handle the lorri state
 /// for a given nix file.
@@ -139,15 +139,9 @@ impl Project {
     }
 
     /// Create roots to store paths.
-    //
-    // XXX Consider a race-less solution where we put all the symlinks to store paths
-    // in a single project-homed directory,
-    // then atomically replace the GC pin symlink from the old directory to the new one.
     pub fn create_roots(
         &self,
         rooted_path: RootedPath,
-        user: Username,
-        logger: &slog::Logger,
     ) -> Result<OutputPath<RootPath>, AddRootError> {
         for path in rooted_path.extra_paths {
             let base = path
@@ -155,84 +149,35 @@ impl Project {
                 .file_name()
                 .ok_or_else(|| AddRootError::naming(path.as_path()))?
                 .into();
-            self.create_root(base, path, user.clone(), logger)?;
+            self.create_root(base, path)?;
         }
-        self.create_root(Self::ENV_CONTEXT.into(), rooted_path.path, user, logger)
+        self.create_root(Self::ENV_CONTEXT.into(), rooted_path.path)
     }
 
-    //   We create a symlink from
-    //     /nix/var/nix/gcroots/per-user/{user}/{self.hash()}-{base_name} =>
-    //     {self.gc_root()}/{base_name} =>
-    //     {store_path}
-    //
     fn create_root(
         &self,
         base_name: PathBuf,
         store_path: StorePath,
-        user: Username,
-        logger: &slog::Logger,
-    ) -> Result<OutputPath<RootPath>, AddRootError>
-where {
-        debug!(logger, "adding root"; "to" => store_path.as_path().to_str(), "from" => self.gc_root(&base_name).display());
-        std::fs::remove_file(self.gc_root(&base_name))
-            .or_else(|e| AddRootError::remove(e, self.gc_root(&base_name).as_path()))?;
+    ) -> Result<OutputPath<RootPath>, AddRootError> {
+        let mut cmd = Command::new("nix");
+        cmd.args([
+            OsStr::new("build"),
+            OsStr::new("--out-link"),
+            self.gc_root(&base_name).as_path().as_os_str(),
+            store_path.as_path().as_os_str(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
-        // the forward GC root that points from the store path to our cache gc_roots dir
-        std::os::unix::fs::symlink(store_path.as_path(), self.gc_root(&base_name)).map_err(
-            |e| AddRootError::symlink(e, store_path.as_path(), self.gc_root(&base_name).as_path()),
-        )?;
-
-        // the reverse GC root that points from nix to our cache gc_roots dir
-        // TODO: check nix state dir at startup, like USER.
-        let nix_var_nix = || AbsPathBuf::new_unchecked(PathBuf::from("/nix/var/nix/"));
-        let nix_gc_root_user_dir = std::env::var_os("NIX_STATE_DIR")
-            .map_or_else(
-                || Ok(nix_var_nix()),
-                |path| AbsPathBuf::new(PathBuf::from(path)),
-            )
-            .unwrap_or_else(|_pb| nix_var_nix())
-            .join(PathBuf::from("gcroots/per-user"))
-            .join(user.0);
-
-        // The user directory sometimes doesn’t exist,
-        // but we can create it (it’s root but `rwxrwxrwx`)
-        if !nix_gc_root_user_dir.as_path().is_dir() {
-            std::fs::create_dir_all(nix_gc_root_user_dir.as_path()).map_err(|source| {
-                AddRootError {
-                    source,
-                    msg: format!(
-                        "Failed to create missing nix user gc directory: {}",
-                        nix_gc_root_user_dir.display()
-                    ),
-                }
-            })?
+        if !cmd
+            .status()
+            .map_err(|e| AddRootError::nix_run_error(e, store_path.as_path()))?
+            .success()
+        {
+            return Err(AddRootError::nix_failed(store_path.as_path()));
         }
 
-        // We register a garbage collection root, which points back to our `~/.cache/lorri/gc_roots` directory,
-        // so that nix won’t delete our shell environment.
-        let nix_gc_root_user_dir_root = nix_gc_root_user_dir.join(format!(
-            "{}-{}",
-            self.hash(),
-            base_name.as_path().to_str().expect("weird paths")
-        ));
-
-        debug!(logger, "connecting root"; "from" => self.gc_root(&base_name).display(), "to" => nix_gc_root_user_dir_root.display());
-        std::fs::remove_file(nix_gc_root_user_dir_root.as_path())
-            .or_else(|err| AddRootError::remove(err, nix_gc_root_user_dir_root.as_path()))?;
-
-        std::os::unix::fs::symlink(
-            self.gc_root(&base_name),
-            nix_gc_root_user_dir_root.as_path(),
-        )
-        .map_err(|e| {
-            AddRootError::symlink(
-                e,
-                self.gc_root(&base_name).as_path(),
-                nix_gc_root_user_dir_root.as_path(),
-            )
-        })?;
-
-        // TODO: don’t return the RootPath here
         Ok(OutputPath {
             shell_gc_root: RootPath(self.gc_root(&base_name)),
         })
@@ -282,33 +227,26 @@ pub struct AddRootError {
 }
 
 impl AddRootError {
+    fn nix_run_error(source: std::io::Error, path: &Path) -> AddRootError {
+        AddRootError {
+            source,
+            msg: format!("error running nix command for {}", path.display()),
+        }
+    }
+
+    fn nix_failed(path: &Path) -> AddRootError {
+        AddRootError {
+            source: std::io::Error::new(std::io::ErrorKind::Other, "nix failed"),
+            msg: format!("nix build returned non-zero status for {}", path.display()),
+        }
+    }
+
     /// A root path can't be properly named - because it doesn't have a filename
     /// c.f. Path.filename()
     fn naming(path: &Path) -> AddRootError {
         AddRootError {
             source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "no filename"),
             msg: format!("Could not determine a filename for {}", path.display()),
-        }
-    }
-
-    /// Ignore NotFound errors (it is after all a remove), and otherwise
-    /// return an error explaining a delete on path failed.
-    fn remove(source: std::io::Error, path: &Path) -> Result<(), AddRootError> {
-        if source.kind() == std::io::ErrorKind::NotFound {
-            Ok(())
-        } else {
-            Err(AddRootError {
-                source,
-                msg: format!("Failed to delete {}", path.display()),
-            })
-        }
-    }
-
-    /// Return an error explaining what symlink failed
-    fn symlink(source: std::io::Error, src: &Path, dest: &Path) -> AddRootError {
-        AddRootError {
-            source,
-            msg: format!("Failed to symlink {} to {}", src.display(), dest.display()),
         }
     }
 }
