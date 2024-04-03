@@ -213,7 +213,7 @@ let
         description = "run cargo test ${test}";
         test = writeCargo "cargo-test"
           # the tests need bash and nix and direnv
-          (pathPrependBins [ pkgs.coreutils pkgs.bash pkgs.nix pkgs.direnv ])
+          (pathPrependBins [ pkgs.coreutils pkgs.bash pkgs.nix pkgs.direnv pkgs.git ])
           [ "test" "--" "--include-ignored" test ];
         };
       }) troubled;
@@ -298,7 +298,7 @@ let
   # environment between developer machine and CI
   emptyTestEnv = test:
     writeExecline "${test.name}-empty-env" {}
-      [ (runInEmptyEnv [ "USER" "HOME" "TERM" "PATH"]) test ];
+      [ (runInEmptyEnv [ "USER" "HOME" "TERM"]) test ];
 
   testsWithEmptyEnv = tests: pkgs.lib.mapAttrs
     (_: test: test // { test = emptyTestEnv test.test; }) tests;
