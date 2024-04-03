@@ -298,7 +298,7 @@ let
   # environment between developer machine and CI
   emptyTestEnv = test:
     writeExecline "${test.name}-empty-env" {}
-      [ (runInEmptyEnv [ "USER" "HOME" "TERM" ]) test ];
+      [ (runInEmptyEnv [ "USER" "HOME" "TERM" "PATH"]) test ];
 
   testsWithEmptyEnv = tests: pkgs.lib.mapAttrs
     (_: test: test // { test = emptyTestEnv test.test; }) tests;
