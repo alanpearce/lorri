@@ -2,6 +2,7 @@
 //! evaluate and build a given Nix file.
 
 use crate::builder::{self, BuildError};
+use crate::cas::ContentAddressable;
 use crate::daemon::LoopHandlerEvent;
 use crate::nix::options::NixOptions;
 use crate::pathreduction::reduce_paths;
@@ -67,6 +68,8 @@ pub struct BuildLoop<'a> {
     /// Watches all input files for changes.
     /// As new input files are discovered, they are added to the watchlist.
     watch: Watch,
+    /// Content addressable store to save static files in.
+    cas: ContentAddressable,
     nix_gc_root_user_dir: project::NixGcRootUserDir,
     logger: slog::Logger,
 }
@@ -109,6 +112,7 @@ impl<'a> BuildLoop<'a> {
         project: &'a Project,
         extra_nix_options: NixOptions,
         nix_gc_root_user_dir: project::NixGcRootUserDir,
+        cas: ContentAddressable,
         logger: slog::Logger,
     ) -> anyhow::Result<BuildLoop<'a>> {
         let mut watch = Watch::try_new(logger.clone()).map_err(|err| anyhow!(err))?;
@@ -128,6 +132,7 @@ impl<'a> BuildLoop<'a> {
             extra_nix_options,
             watch,
             nix_gc_root_user_dir,
+            cas,
             logger,
         })
     }
@@ -244,7 +249,7 @@ impl<'a> BuildLoop<'a> {
     /// Start an actual build, asynchronously.
     fn start_build(&self) -> Async<Result<builder::RunResult, BuildError>> {
         let nix_file = self.project.nix_file.clone();
-        let cas = self.project.cas.clone();
+        let cas = self.cas.clone();
         let extra_nix_options = self.extra_nix_options.clone();
         let logger2 = self.logger.clone();
         crate::run_async::Async::run(&self.logger, move || {
@@ -258,7 +263,7 @@ impl<'a> BuildLoop<'a> {
     /// the evaluation.
     pub fn once(&mut self) -> Result<builder::OutputPath, BuildError> {
         let nix_file = self.project.nix_file.clone();
-        let cas = self.project.cas.clone();
+        let cas = self.cas.clone();
         let extra_nix_options = self.extra_nix_options.clone();
         let logger2 = self.logger.clone();
         self.handle_run_result(

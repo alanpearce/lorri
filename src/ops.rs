@@ -356,6 +356,7 @@ pub fn op_ping(paths: &Paths, nix_file: NixFile, logger: &slog::Logger) -> Resul
 /// way the prompt looks.
 pub fn op_shell(
     project: Project,
+    cas: &ContentAddressable,
     opts: ShellOptions,
     logger: &slog::Logger,
 ) -> Result<(), ExitError> {
@@ -382,9 +383,9 @@ pub fn op_shell(
         if opts.cached {
             cached?
         } else {
-            build_root(&project, cached.is_ok(), nix_gc_root_user_dir, logger)?
+            build_root(&project, cached.is_ok(), nix_gc_root_user_dir, cas, logger)?
         },
-        &project.cas,
+        cas,
         logger,
     )?;
 
@@ -417,17 +418,19 @@ fn build_root(
     project: &Project,
     cached: bool,
     nix_gc_root_user_dir: NixGcRootUserDir,
+    cas: &ContentAddressable,
     logger: &slog::Logger,
 ) -> Result<PathBuf, ExitError> {
     let logger2 = logger.clone();
     let project2 = project.clone();
+    let cas2 = cas.clone();
 
     let run_result = crate::thread::race(
         logger,
         move |_ignored_stop| {
             Ok(builder::instantiate_and_build(
                 &project2.nix_file,
-                &project2.cas,
+                &cas2,
                 &crate::nix::options::NixOptions::empty(),
                 &logger2,
             ))
@@ -535,7 +538,7 @@ EVALUATION_ROOT="{}"
 ///
 /// See the documentation for `crate::ops::shell`.
 pub fn op_start_user_shell(
-    project: Project,
+    cas: &ContentAddressable,
     opts: StartUserShellOptions_,
 ) -> Result<(), ExitError> {
     // This temporary directory will not be cleaned up by lorri because we exec into the shell
@@ -543,7 +546,7 @@ pub fn op_start_user_shell(
     // lorri creates in this directory are only a few hundred bytes long; (2) the directory will be
     // cleaned up on reboot or whenever the OS decides to purge temporary directories.
     let tempdir = tempfile::tempdir().expect("failed to create temporary directory");
-    let e = shell_cmd(opts.shell_path.as_ref(), &project.cas, tempdir.path()).exec();
+    let e = shell_cmd(opts.shell_path.as_ref(), cas, tempdir.path()).exec();
 
     // 'exec' will never return on success, so if we get here, we know something has gone wrong.
     panic!("failed to exec into '{}': {}", opts.shell_path.display(), e);
@@ -917,21 +920,23 @@ pub fn op_upgrade(
 /// details.
 pub fn op_watch(
     project: Project,
+    cas: &ContentAddressable,
     opts: WatchOptions,
     logger: &slog::Logger,
 ) -> Result<(), ExitError> {
     let username = project::Username::from_env_var().map_err(ExitError::temporary)?;
     let nix_gc_root_user_dir = project::NixGcRootUserDir::get_or_create(&username)?;
     if opts.once {
-        main_run_once(project, nix_gc_root_user_dir, logger)
+        main_run_once(project, nix_gc_root_user_dir, cas, logger)
     } else {
-        main_run_forever(project, nix_gc_root_user_dir, logger)
+        main_run_forever(project, nix_gc_root_user_dir, cas, logger)
     }
 }
 
 fn main_run_once(
     project: Project,
     nix_gc_root_user_dir: NixGcRootUserDir,
+    cas: &ContentAddressable,
     logger: &slog::Logger,
 ) -> Result<(), ExitError> {
     // TODO: add the ability to pass extra_nix_options to watch
@@ -939,6 +944,7 @@ fn main_run_once(
         &project,
         NixOptions::empty(),
         nix_gc_root_user_dir,
+        cas.clone(),
         logger.clone(),
     )
     .map_err(ExitError::temporary)?;
@@ -1143,15 +1149,23 @@ pub fn op_gc(logger: &slog::Logger, opts: crate::cli::GcOptions) -> Result<(), E
 fn main_run_forever(
     project: Project,
     nix_gc_root_user_dir: NixGcRootUserDir,
+    cas: &ContentAddressable,
     logger: &slog::Logger,
 ) -> Result<(), ExitError> {
     let (tx_build_results, rx_build_results) = chan::unbounded();
     let (tx_ping, rx_ping) = chan::unbounded();
     let logger2 = logger.clone();
+    let cas2 = cas.clone();
     // TODO: add the ability to pass extra_nix_options to watch
     let build_thread = {
         Async::run(logger, move || {
-            match BuildLoop::new(&project, NixOptions::empty(), nix_gc_root_user_dir, logger2) {
+            match BuildLoop::new(
+                &project,
+                NixOptions::empty(),
+                nix_gc_root_user_dir,
+                cas2,
+                logger2,
+            ) {
                 Ok(mut bl) => bl.forever(tx_build_results, rx_ping).never(),
                 Err(e) => Err(ExitError::temporary(e)),
             }

@@ -187,7 +187,7 @@ impl Daemon {
         // For each build instruction, add the corresponding file
         // to the watch list.
         for IndicateActivity { nix_file, rebuild } in rx_activity {
-            let project = crate::project::Project::new(nix_file, gc_root_dir, cas.clone())
+            let project = crate::project::Project::new(nix_file, gc_root_dir)
                 // TODO: the project needs to create its gc root dir
                 .unwrap();
 
@@ -215,6 +215,7 @@ impl Daemon {
                     let nix_gc_root_user_dir = nix_gc_root_user_dir.clone();
                     let logger = logger.clone();
                     let logger2 = logger.clone();
+                    let cas2 = cas.clone();
                     // TODO: how to use the pool here?
                     // We cannot just spawn new threads once messages come in,
                     // because then then pool objects is stuck in this loop
@@ -228,6 +229,7 @@ impl Daemon {
                             &project,
                             extra_nix_options,
                             nix_gc_root_user_dir,
+                            cas2,
                             logger,
                         ) {
                             Ok(mut build_loop) => {

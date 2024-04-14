@@ -25,6 +25,7 @@ pub struct DirenvTestCase {
     #[allow(dead_code)]
     pub cachedir: TempDir,
     project: Project,
+    cas: ContentAddressable,
     logger: slog::Logger,
 }
 
@@ -40,12 +41,13 @@ impl DirenvTestCase {
         let shell_file = NixFile::from(AbsPathBuf::new(test_root.join("shell.nix")).unwrap());
 
         let cas = ContentAddressable::new(cachedir.join("cas").to_owned()).unwrap();
-        let project = Project::new(shell_file.clone(), &cachedir.join("gc_roots"), cas).unwrap();
+        let project = Project::new(shell_file.clone(), &cachedir.join("gc_roots")).unwrap();
 
         DirenvTestCase {
             projectdir,
             cachedir: cachedir_tmp,
             project,
+            cas,
             logger: lorri::logging::test_logger(),
         }
     }
@@ -57,6 +59,7 @@ impl DirenvTestCase {
             &self.project,
             NixOptions::empty(),
             project::NixGcRootUserDir::get_or_create(&username).unwrap(),
+            self.cas.clone(),
             self.logger.clone(),
         )
         .expect("could not set up build loop")

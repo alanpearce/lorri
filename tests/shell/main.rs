@@ -25,10 +25,8 @@ fn cargo_bin(name: &str) -> PathBuf {
 #[test]
 fn loads_env() {
     let tempdir = tempfile::tempdir().expect("tempfile::tempdir() failed us!");
-    let project = project(
-        "loads_env",
-        &lorri::AbsPathBuf::new(tempdir.path().to_owned()).unwrap(),
-    );
+    let cache_dir = &lorri::AbsPathBuf::new(tempdir.path().to_owned()).unwrap();
+    let project = project("loads_env", cache_dir);
 
     // Launch as a real user
     let res = Command::new(cargo_bin("lorri"))
@@ -48,8 +46,11 @@ fn loads_env() {
     assert!(res.status.success(), "lorri shell command failed");
 
     let logger = lorri::logging::test_logger();
+    let cas_dir = cache_dir.join("cas").to_owned();
+    fs::create_dir_all(&cas_dir).expect("failed to create CAS directory");
+    let cas = ContentAddressable::new(cas_dir).unwrap();
 
-    let output = ops::bash_cmd(build(&project, &logger), &project.cas, &logger)
+    let output = ops::bash_cmd(build(&project, &cas, &logger), &cas, &logger)
         .unwrap()
         .args(["-c", "echo $MY_ENV_VAR"])
         .output()
@@ -71,27 +72,19 @@ fn project(name: &str, cache_dir: &AbsPathBuf) -> Project {
         name,
     ]))
     .expect("CARGO_MANIFEST_DIR was not absolute");
-    let cas_dir = cache_dir.join("cas").to_owned();
-    fs::create_dir_all(&cas_dir).expect("failed to create CAS directory");
     Project::new(
         NixFile::from(test_root.join("shell.nix")),
         &cache_dir.join("gc_roots"),
-        ContentAddressable::new(cas_dir).unwrap(),
     )
     .unwrap()
 }
 
-fn build(project: &Project, logger: &slog::Logger) -> PathBuf {
+fn build(project: &Project, cas: &ContentAddressable, logger: &slog::Logger) -> PathBuf {
     project
         .create_roots(
-            builder::instantiate_and_build(
-                &project.nix_file,
-                &project.cas,
-                &NixOptions::empty(),
-                logger,
-            )
-            .unwrap()
-            .result,
+            builder::instantiate_and_build(&project.nix_file, cas, &NixOptions::empty(), logger)
+                .unwrap()
+                .result,
             project::NixGcRootUserDir::get_or_create(&project::Username::from_env_var().unwrap())
                 .unwrap(),
             logger,

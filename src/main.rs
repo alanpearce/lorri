@@ -87,7 +87,7 @@ fn find_nix_file(shellfile: &Path) -> Result<NixFile, ExitError> {
 }
 
 fn create_project(paths: &constants::Paths, shell_nix: NixFile) -> Result<Project, ExitError> {
-    Project::new(shell_nix, paths.gc_root_dir(), paths.cas_store().clone()).map_err(|err| {
+    Project::new(shell_nix, paths.gc_root_dir()).map_err(|err| {
         ExitError::temporary(anyhow::anyhow!(err).context("Could not set up project paths"))
     })
 }
@@ -130,12 +130,12 @@ fn run_command(logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> 
         }
         Command::Shell(opts) => {
             let (project, logger) = with_project(&opts.nix_file)?;
-            ops::op_shell(project, opts, &logger)
+            ops::op_shell(project, paths.cas_store(), opts, &logger)
         }
 
         Command::Watch(opts) => {
             let (project, logger) = with_project(&opts.nix_file)?;
-            ops::op_watch(project, opts, &logger)
+            ops::op_watch(project, paths.cas_store(), opts, &logger)
         }
         Command::Daemon(opts) => {
             install_signal_handler();
@@ -149,10 +149,7 @@ fn run_command(logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> 
                 let nix_file = find_nix_file(&opts.nix_file)?;
                 ops::op_ping(&paths, nix_file, logger)
             }
-            Internal_::StartUserShell_(opts) => {
-                let (project, _logger) = with_project(&opts.nix_file)?;
-                ops::op_start_user_shell(project, opts)
-            }
+            Internal_::StartUserShell_(opts) => ops::op_start_user_shell(paths.cas_store(), opts),
             Internal_::StreamEvents_(se) => ops::op_stream_events(&paths, se.kind, logger),
         },
     }
