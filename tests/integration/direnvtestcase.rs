@@ -51,7 +51,7 @@ impl DirenvTestCase {
     }
 
     /// Execute the build loop one time
-    pub fn evaluate(&mut self) -> Result<builder::OutputPath<project::RootPath>, BuildError> {
+    pub fn evaluate(&mut self) -> Result<builder::OutputPath, BuildError> {
         let username = project::Username::from_env_var().unwrap();
         BuildLoop::new(
             &self.project,
