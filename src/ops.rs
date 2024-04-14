@@ -367,7 +367,15 @@ pub fn op_shell(
     })?;
     let username = project::Username::from_env_var().map_err(ExitError::environment_problem)?;
     let nix_gc_root_user_dir = project::NixGcRootUserDir::get_or_create(&username)?;
-    let cached = cached_root(&project);
+    let cached = {
+        if !project.root_paths().all_exist() {
+            Err(ExitError::temporary(anyhow::anyhow!(
+                "project has not previously been built successfully",
+            )))
+        } else {
+            Ok(project.root_paths().shell_gc_root.0.as_path().to_owned())
+        }
+    };
     let mut bash_cmd = bash_cmd(
         if opts.cached {
             cached?
@@ -486,17 +494,6 @@ fn build_root(
         .0
         .as_path()
         .to_owned())
-}
-
-fn cached_root(project: &Project) -> Result<PathBuf, ExitError> {
-    let root_paths = project.root_paths();
-    if !root_paths.all_exist() {
-        Err(ExitError::temporary(anyhow::anyhow!(
-            "project has not previously been built successfully",
-        )))
-    } else {
-        Ok(root_paths.shell_gc_root.0.as_path().to_owned())
-    }
 }
 
 /// Instantiates a `Command` to start bash.
