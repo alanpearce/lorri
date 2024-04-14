@@ -248,7 +248,7 @@ impl<'a> BuildLoop<'a> {
         let extra_nix_options = self.extra_nix_options.clone();
         let logger2 = self.logger.clone();
         crate::run_async::Async::run(&self.logger, move || {
-            builder::run(&nix_file, &cas, &extra_nix_options, &logger2)
+            builder::instantiate_and_build(&nix_file, &cas, &extra_nix_options, &logger2)
         })
     }
 
@@ -263,7 +263,7 @@ impl<'a> BuildLoop<'a> {
         let logger2 = self.logger.clone();
         self.handle_run_result(
             crate::run_async::Async::run(&self.logger, move || {
-                builder::run(&nix_file, &cas, &extra_nix_options, &logger2)
+                builder::instantiate_and_build(&nix_file, &cas, &extra_nix_options, &logger2)
             })
             .block(),
         )

@@ -441,7 +441,7 @@ fn build_root(
     });
 
     // TODO: add the ability to pass extra_nix_options to shell
-    let run_result = builder::run(
+    let run_result = builder::instantiate_and_build(
         &project.nix_file,
         &project.cas,
         &crate::nix::options::NixOptions::empty(),

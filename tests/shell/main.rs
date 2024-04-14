@@ -84,7 +84,7 @@ fn project(name: &str, cache_dir: &AbsPathBuf) -> Project {
 fn build(project: &Project, logger: &slog::Logger) -> PathBuf {
     project
         .create_roots(
-            builder::run(
+            builder::instantiate_and_build(
                 &project.nix_file,
                 &project.cas,
                 &NixOptions::empty(),
