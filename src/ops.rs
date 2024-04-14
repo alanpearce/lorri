@@ -3,7 +3,6 @@
 mod direnv;
 pub mod error;
 
-use crate::sqlite;
 use crate::build_loop::BuildLoop;
 use crate::build_loop::Event;
 use crate::build_loop::Reason;
@@ -962,15 +961,15 @@ fn main_run_once(
 }
 
 /// Represents a gc root along with some metadata, used for json output of lorri gc info
-struct GcRootInfo {
+pub struct GcRootInfo {
     /// directory where root is stored
-    gc_dir: AbsPathBuf,
+    pub gc_dir: AbsPathBuf,
     /// nix file from which the root originates. If None, then the root is considered dead.
-    nix_file: Option<PathBuf>,
+    pub nix_file: Option<PathBuf>,
     /// timestamp of the last build
-    timestamp: SystemTime,
+    pub timestamp: SystemTime,
     /// whether `nix_file` still exists
-    alive: bool,
+    pub alive: bool,
 }
 
 impl GcRootInfo {
@@ -998,7 +997,7 @@ impl GcRootInfo {
 }
 
 /// Returns a list of existing gc roots along with some metadata
-fn list_roots(logger: &slog::Logger) -> Result<Vec<GcRootInfo>, ExitError> {
+pub fn list_roots(logger: &slog::Logger) -> Result<Vec<GcRootInfo>, ExitError> {
     let paths = crate::ops::get_paths()?;
     let mut res = Vec::new();
     let gc_root_dir = paths.gc_root_dir();

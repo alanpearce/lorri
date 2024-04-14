@@ -31,6 +31,8 @@ fn main() {
         let logger = logging::root(verbosity);
         debug!(logger, "input options"; "options" => ?opts);
 
+        lorri::sqlite::migrate_db(&logger).unwrap();
+
         match run_command(&logger, opts) {
             Err(err) => {
                 error!(logger, "{}", err.message());
