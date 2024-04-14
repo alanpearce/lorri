@@ -26,7 +26,11 @@ thiserror = "1.0"
 
 # TODO: update to 0.3
 structopt.version = "0.2"
+
+# TODO: update to 0.3
 structopt.default-features = false
+
+# TODO: update to 0.3
 structopt.features = [
   # "default",
   "suggestions",
@@ -55,11 +59,14 @@ lazy_static = "1.4.0"
 md5 = "0.7.0"
 vec1 = ">= 1.1.0, <1.7.0"
 human-panic = { path = "vendor/human-panic" }
+itertools = "0.12.1"
 
 [dev-dependencies]
 # 1.0.0 requires at least rust 1.50
 proptest.version = "0.10.1"
+# 1.0.0 requires at least rust 1.50
 proptest.default-features = false
+# 1.0.0 requires at least rust 1.50
 proptest.features = [
   "std",
   # reenable if proptest kills the test runner

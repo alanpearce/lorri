@@ -46,6 +46,7 @@ use std::{fmt::Debug, fs::remove_dir_all};
 use anyhow::Context;
 use crossbeam_channel as chan;
 
+use itertools::Itertools;
 use serde_json::json;
 use serde_json::Value;
 use slog::{debug, info, warn};
@@ -1033,15 +1034,6 @@ fn list_roots(logger: &slog::Logger) -> Result<Vec<GcRootInfo>, ExitError> {
     Ok(res)
 }
 
-#[derive(Serialize)]
-/// How removing a gc root went, for json ouput
-struct RemovalStatus {
-    /// What error was encountered, or success
-    error: Option<String>,
-    /// The root we tried to remove
-    root: GcRootInfo,
-}
-
 /// Print or remove gc roots depending on cli options.
 pub fn op_gc(logger: &slog::Logger, opts: crate::cli::GcOptions) -> Result<(), ExitError> {
     let infos = list_roots(logger)?;
@@ -1109,41 +1101,61 @@ pub fn op_gc(logger: &slog::Logger, opts: crate::cli::GcOptions) -> Result<(), E
                 })
                 .collect();
             let mut result = Vec::new();
-            let n = to_remove.len();
             for info in to_remove {
                 match remove_dir_all(&info.gc_dir) {
                     Ok(_) => {
-                        if opts.json {
-                            result.push(RemovalStatus {
-                                error: None,
-                                root: info,
-                            });
-                        }
+                        result.push(Ok(info));
                     }
                     Err(e) => {
-                        if opts.json {
-                            result.push(RemovalStatus {
-                                error: Some(e.to_string()),
-                                root: info,
-                            });
-                        } else {
-                            eprintln!("Error: could not remove {}: {}", info.gc_dir.display(), e);
-                        }
+                        result.push(Err((info, e.to_string())));
                     }
                 }
             }
             if opts.json {
-                serde_json::to_writer(std::io::stdout(), &result)
-                    .expect("failed to serialize result");
+                let res = result
+                    .into_iter()
+                    .map(|r| match r {
+                        Err((info, err)) => json!({
+                            // Error, if any
+                            "error": err,
+                            // The root we tried to remove
+                            "root": info
+                        }),
+                        Ok(info) => json!({
+                            "error": null,
+                            "root": info
+                        }),
+                    })
+                    .collect::<Vec<_>>();
+                serde_json::to_writer(std::io::stdout(), &res).expect("failed to serialize result");
             } else {
-                println!("Removed {} gc roots.", n);
-                if n > 0 {
+                let (ok, err): (Vec<_>, Vec<_>) = result.into_iter().partition_result();
+                println!("Removed {} gc roots.", ok.len());
+                if err.len() > 0 {
+                    for (info, e) in err {
+                        warn!(
+                            logger,
+                            "Failed to remove gc root: {}: {}",
+                            info.gc_dir.display(),
+                            e
+                        )
+                    }
+                }
+                if ok.len() > 0 {
                     println!("Remember to run nix-collect-garbage to actually free space.");
                 }
             }
         }
     }
     Ok(())
+}
+#[derive(Serialize)]
+/// How removing a gc root went, for json ouput
+struct RemovalStatus {
+    /// What error was encountered, or success
+    error: Option<String>,
+    /// The root we tried to remove
+    root: GcRootInfo,
 }
 
 fn main_run_forever(
