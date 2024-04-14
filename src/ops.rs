@@ -36,12 +36,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use std::{collections::HashSet, fs::File, time::SystemTime};
-use std::{env, fs, io, thread};
+use std::{env, fs, io};
 use std::{fmt::Debug, fs::remove_dir_all};
 
 use anyhow::Context;
@@ -411,44 +409,54 @@ fn build_root(
     nix_gc_root_user_dir: NixGcRootUserDir,
     logger: &slog::Logger,
 ) -> Result<PathBuf, ExitError> {
-    let building = Arc::new(AtomicBool::new(true));
-    let building_clone = building.clone();
     let logger2 = logger.clone();
-    let progress_thread = Async::run(logger, move || {
-        // Keep track of the start time to display a hint to the user that they can use `--cached`,
-        // but only if a cached version of the environment exists
-        let mut start = if cached { Some(Instant::now()) } else { None };
+    let project2 = project.clone();
 
-        eprint!("lorri: building environment");
-        while building_clone.load(Ordering::SeqCst) {
-            // Show `--cached` hint once after some time has passed
-            if let Some(start_time) = start {
-                if start_time.elapsed() >= Duration::from_millis(10_000) {
-                    eprintln!(
-                        "\nHint: you can use `lorri shell --cached` to use the most recent \
-                         environment that was built successfully."
-                    );
-                    start = None; // Don't show the hint again
-                }
+    let run_result = crate::thread::race(
+        logger,
+        move |_ignored_stop| {
+            Ok(builder::instantiate_and_build(
+                &project2.nix_file,
+                &project2.cas,
+                &crate::nix::options::NixOptions::empty(),
+                &logger2,
+            ))
+        },
+        // display a a progress bar on stderr while the shell is loading
+        move |stop| {
+            // Keep track of the start time to display a hint to the user that they can use `--cached`,
+            // but only if a cached version of the environment exists
+            let hint_time = Instant::now() + Duration::from_secs(10);
+            eprint!("lorri: building environment");
+            loop {
+                let now = Instant::now();
+
+                let show_hint_after = if cached && hint_time > now {
+                    chan::after(hint_time - now)
+                } else {
+                    chan::never()
+                };
+
+                chan::select!(
+                    recv(stop) -> stop => {
+                        eprintln!(". done");
+                        return Err(stop.unwrap());
+                    },
+                    recv(show_hint_after) -> _ => {
+                        eprintln!(
+                            "\nHint: you can use `lorri shell --cached` to use the most recent \
+                             environment that was built successfully."
+                        );
+                    },
+                    recv(chan::after(Duration::from_millis(500))) -> _ => {
+                    // Indicate progress
+                    eprint!(".");
+                    io::stderr().flush().expect("couldn’t flush‽");
+                                    }
+                );
             }
-            thread::sleep(Duration::from_millis(500));
-
-            // Indicate progress
-            eprint!(".");
-            io::stderr().flush().expect("couldn’t flush‽");
-        }
-        eprintln!(". done");
-    });
-
-    // TODO: add the ability to pass extra_nix_options to shell
-    let run_result = builder::instantiate_and_build(
-        &project.nix_file,
-        &project.cas,
-        &crate::nix::options::NixOptions::empty(),
-        &logger2,
+        },
     );
-    building.store(false, Ordering::SeqCst);
-    progress_thread.block();
 
     let run_result = run_result
         .map_err(|e| {
@@ -470,7 +478,7 @@ fn build_root(
         .result;
 
     Ok(project
-        .create_roots(run_result, nix_gc_root_user_dir, &logger2)
+        .create_roots(run_result, nix_gc_root_user_dir, &logger)
         .map_err(|e| {
             ExitError::temporary(anyhow::Error::new(e).context("rooting the environment failed"))
         })?
