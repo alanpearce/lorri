@@ -31,6 +31,7 @@ pub mod pathreduction;
 pub mod project;
 pub mod run_async;
 pub mod socket;
+pub mod sqlite;
 pub mod thread;
 pub mod watch;
 

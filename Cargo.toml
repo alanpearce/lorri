@@ -60,6 +60,7 @@ md5 = "0.7.0"
 vec1 = ">= 1.1.0, <1.7.0"
 human-panic = { path = "vendor/human-panic" }
 itertools = "0.12.1"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
 
 [dev-dependencies]
 # 1.0.0 requires at least rust 1.50
