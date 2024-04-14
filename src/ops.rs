@@ -426,7 +426,7 @@ fn build_root(
         move |stop| {
             // Keep track of the start time to display a hint to the user that they can use `--cached`,
             // but only if a cached version of the environment exists
-            let hint_time = Instant::now() + Duration::from_secs(10);
+            let hint_time = Instant::now() + Duration::from_secs(3);
             eprint!("lorri: building environment");
             loop {
                 let now = Instant::now();
