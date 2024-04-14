@@ -4,7 +4,8 @@ mod direnv;
 pub mod error;
 
 use crate::build_loop::BuildLoop;
-use crate::build_loop::{Event, EventI, ReasonI};
+use crate::build_loop::Event;
+use crate::build_loop::Reason;
 use crate::builder::OutputPath;
 use crate::cas::ContentAddressable;
 use crate::changelog;
@@ -19,6 +20,7 @@ use crate::nix::options::NixOptions;
 use crate::nix::CallOpts;
 use crate::ops::direnv::{DirenvVersion, MIN_DIRENV_VERSION};
 use crate::ops::error::{ExitAs, ExitError, ExitErrorType};
+use crate::path_to_json_string;
 use crate::project::{NixGcRootUserDir, Project};
 use crate::run_async::Async;
 use crate::socket::path::SocketPath;
@@ -44,6 +46,7 @@ use std::{fmt::Debug, fs::remove_dir_all};
 use anyhow::Context;
 use crossbeam_channel as chan;
 
+use serde_json::json;
 use slog::{debug, info, warn};
 use thiserror::Error;
 
@@ -598,30 +601,6 @@ impl FromStr for EventKind {
     }
 }
 
-// These types are just transparent newtype wrappers to implement a different serde class and JsonEncode
-
-/// For now use the EventI structure, in the future we might want to split it off.
-/// At least it will show us that we need to change something here if we change it
-/// and it relates to this interface.
-#[derive(Serialize)]
-#[serde(transparent)]
-struct StreamEvent(EventI<StreamNixFile, StreamReason, StreamOutputPath, StreamBuildError>);
-
-/// Nix files are encoded as strings
-#[derive(Serialize)]
-#[serde(transparent)]
-struct StreamNixFile(String);
-
-/// Same here, the reason contains a nix file which has to be converted to a string.
-#[derive(Serialize)]
-#[serde(transparent)]
-struct StreamReason(ReasonI<String>);
-
-/// And same here, OutputPaths are GcRoots and have to be converted as well.
-#[derive(Serialize)]
-#[serde(transparent)]
-struct StreamOutputPath(OutputPath<String>);
-
 /// Just expose the error message for now.
 #[derive(Serialize)]
 struct StreamBuildError {
@@ -676,21 +655,37 @@ pub fn stream_events(kind: EventKind, logger: &slog::Logger) -> Result<(), ExitE
                 }
                 ev => match (snapshot_done, &kind) {
                     (_, EventKind::All) | (false, EventKind::Snapshot) | (true, EventKind::Live) => {
-                        fn nix_file_string(nix_file: NixFile) -> String {
-                            nix_file.display().to_string()
-                        }
+                        let json: serde_json::Value = match ev {
+                            Event::SectionEnd => json!({"SectionEnd":{}}),
+                            Event::Started { nix_file, reason } =>
+                              json!({
+                                "Started": {
+                                    "nix_file": nix_file.to_json_value(),
+                                    "reason": match reason {
+                                        Reason::PingReceived => json!({"PingReceived": {}}),
+                                        Reason::FilesChanged(files) => json!({"FilesChanged": files.iter().map(|p| path_to_json_string(p)).collect::<Vec<serde_json::Value>>()})
+                                    }
+                                }
+                              }),
+                            Event::Completed { nix_file, rooted_output_paths } => json!({
+                              "Completed": {
+                                "nix_file": nix_file.to_json_value(),
+                                "rooted_output_paths": {
+                                    "shell_gc_root": rooted_output_paths.shell_gc_root.0.to_json_value()
+                                }
+                              }
+                            }),
+                            Event::Failure { nix_file, failure } => json!({
+                              "Failure": {
+                                "nix_file": nix_file.to_json_value(),
+                                "failure": { "message": format!("{}",  failure) }
+                              }
+                            }),
+                            };
+
                         serde_json::to_writer(
                             std::io::stdout(),
-                            &StreamEvent(ev.map(
-                                |nix_file| StreamNixFile(nix_file_string(nix_file)),
-                                |reason| StreamReason(reason.map(nix_file_string)),
-                                |output_path| {
-                                    StreamOutputPath(output_path.map(|o| o.display().to_string()))
-                                },
-                                |build_error| StreamBuildError {
-                                    message: format!("{}", build_error),
-                                },
-                            )),
+                            &json
                         )
                             .expect("couldn't serialize event");
                         writeln!(std::io::stdout()).expect("couldn't serialize event");

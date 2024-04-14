@@ -90,7 +90,7 @@ impl Project {
     }
 
     /// Return the filesystem paths for these roots.
-    pub fn root_paths(&self) -> OutputPath<RootPath> {
+    pub fn root_paths(&self) -> OutputPath {
         OutputPath {
             shell_gc_root: RootPath(self.shell_gc_root()),
         }
@@ -105,7 +105,7 @@ impl Project {
         path: RootedPath,
         nix_gc_root_user_dir: NixGcRootUserDir,
         logger: &slog::Logger,
-    ) -> Result<OutputPath<RootPath>, AddRootError>
+    ) -> Result<OutputPath, AddRootError>
 where {
         let store_path = &path.path;
 
@@ -158,7 +158,7 @@ impl RootPath {
     }
 }
 
-impl OutputPath<RootPath> {
+impl OutputPath {
     /// Check whether all all GC roots exist.
     pub fn all_exist(&self) -> bool {
         let crate::builder::OutputPath { shell_gc_root } = self;
