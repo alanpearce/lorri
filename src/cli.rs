@@ -181,6 +181,9 @@ pub enum GcSubcommand {
         /// Also delete the root of projects that were last built before this amount of time, e.g. 30d.
         #[structopt(long = "older-than", parse(try_from_str = "human_friendly_duration"))]
         older_than: Option<Duration>,
+        /// Only print which gc roots would be deleted. No `--json` output yet.
+        #[structopt(long = "dry-run")]
+        dry_run: bool,
     },
 }
 

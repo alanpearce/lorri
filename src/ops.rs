@@ -979,6 +979,30 @@ struct GcRootInfo {
     alive: bool,
 }
 
+impl GcRootInfo {
+    fn format_pretty_oneline(&self) -> String {
+        let target = match &self.nix_file {
+            Some(p) => p.display().to_string(),
+            None => "(?)".to_owned(),
+        };
+        let age = match self.timestamp.elapsed() {
+            Err(_) => "future".to_owned(),
+            Ok(d) => {
+                let days = d.as_secs() / (24 * 60 * 60);
+                format!("{} days ago", days)
+            }
+        };
+        let alive = if self.alive { "" } else { "[dead]" };
+        format!(
+            "{} -> {} {} ({})",
+            self.gc_dir.display(),
+            target,
+            alive,
+            age
+        )
+    }
+}
+
 /// Returns a list of existing gc roots along with some metadata
 fn list_roots(logger: &slog::Logger) -> Result<Vec<GcRootInfo>, ExitError> {
     let paths = crate::ops::get_paths()?;
@@ -1057,25 +1081,7 @@ pub fn op_gc(logger: &slog::Logger, opts: crate::cli::GcOptions) -> Result<(), E
                 .expect("could not serialize gc roots");
             } else {
                 for info in infos {
-                    let target = match info.nix_file {
-                        Some(p) => p.display().to_string(),
-                        None => "(?)".to_owned(),
-                    };
-                    let age = match info.timestamp.elapsed() {
-                        Err(_) => "future".to_owned(),
-                        Ok(d) => {
-                            let days = d.as_secs() / (24 * 60 * 60);
-                            format!("{} days ago", days)
-                        }
-                    };
-                    let alive = if info.alive { "" } else { "[dead]" };
-                    println!(
-                        "{} -> {} {} ({})",
-                        info.gc_dir.display(),
-                        target,
-                        alive,
-                        age
-                    );
+                    println!("{}", info.format_pretty_oneline());
                 }
             }
         }
@@ -1083,6 +1089,7 @@ pub fn op_gc(logger: &slog::Logger, opts: crate::cli::GcOptions) -> Result<(), E
             shell_file,
             all,
             older_than,
+            dry_run,
         } => {
             let files_to_remove: HashSet<PathBuf> = shell_file.into_iter().collect();
             let to_remove: Vec<GcRootInfo> = infos
@@ -1101,54 +1108,67 @@ pub fn op_gc(logger: &slog::Logger, opts: crate::cli::GcOptions) -> Result<(), E
                 })
                 .collect();
             let mut result = Vec::new();
-            for info in to_remove {
-                match remove_dir_all(&info.gc_dir) {
-                    Ok(_) => {
-                        result.push(Ok(info));
+            if dry_run {
+                if to_remove.len() > 0 {
+                    println!("--dry-run: Would delete the following GC roots:");
+                    for info in to_remove {
+                        println!("{}", info.format_pretty_oneline());
                     }
-                    Err(e) => {
-                        result.push(Err((info, e.to_string())));
-                    }
+                } else {
+                    println!("--dry-run: Would not delete any GC roots");
                 }
-            }
-            if opts.json {
-                let res = result
-                    .into_iter()
-                    .map(|r| match r {
-                        Err((info, err)) => json!({
-                            // Error, if any
-                            "error": err,
-                            // The root we tried to remove
-                            "root": info
-                        }),
-                        Ok(info) => json!({
-                            "error": null,
-                            "root": info
-                        }),
-                    })
-                    .collect::<Vec<_>>();
-                serde_json::to_writer(std::io::stdout(), &res).expect("failed to serialize result");
             } else {
-                let (ok, err): (Vec<_>, Vec<_>) = result.into_iter().partition_result();
-                println!("Removed {} gc roots.", ok.len());
-                if err.len() > 0 {
-                    for (info, e) in err {
-                        warn!(
-                            logger,
-                            "Failed to remove gc root: {}: {}",
-                            info.gc_dir.display(),
-                            e
-                        )
+                for info in to_remove {
+                    match remove_dir_all(&info.gc_dir) {
+                        Ok(_) => {
+                            result.push(Ok(info));
+                        }
+                        Err(e) => {
+                            result.push(Err((info, e.to_string())));
+                        }
                     }
                 }
-                if ok.len() > 0 {
-                    println!("Remember to run nix-collect-garbage to actually free space.");
+                if opts.json {
+                    let res = result
+                        .into_iter()
+                        .map(|r| match r {
+                            Err((info, err)) => json!({
+                                // Error, if any
+                                "error": err,
+                                // The root we tried to remove
+                                "root": info
+                            }),
+                            Ok(info) => json!({
+                                "error": null,
+                                "root": info
+                            }),
+                        })
+                        .collect::<Vec<_>>();
+                    serde_json::to_writer(std::io::stdout(), &res)
+                        .expect("failed to serialize result");
+                } else {
+                    let (ok, err): (Vec<_>, Vec<_>) = result.into_iter().partition_result();
+                    println!("Removed {} gc roots.", ok.len());
+                    if err.len() > 0 {
+                        for (info, e) in err {
+                            warn!(
+                                logger,
+                                "Failed to remove gc root: {}: {}",
+                                info.gc_dir.display(),
+                                e
+                            )
+                        }
+                    }
+                    if ok.len() > 0 {
+                        println!("Remember to run nix-collect-garbage to actually free space.");
+                    }
                 }
             }
         }
     }
     Ok(())
 }
+
 #[derive(Serialize)]
 /// How removing a gc root went, for json ouput
 struct RemovalStatus {
