@@ -95,13 +95,13 @@ fn create_project(paths: &constants::Paths, shell_nix: NixFile) -> Result<Projec
 }
 
 /// Run the main function of the relevant command.
-fn run_command(logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> {
+fn run_command(orig_logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> {
     let paths = lorri::ops::get_paths()?;
 
     let with_project_resolved =
         |nix_file| -> std::result::Result<(Project, slog::Logger), ExitError> {
             let project = create_project(&lorri::ops::get_paths()?, nix_file)?;
-            let logger = logger.new(o!("nix_file" => project.nix_file.clone()));
+            let logger = orig_logger.new(o!("nix_file" => project.nix_file.clone()));
             Ok((project, logger))
         };
     let with_project = |nix_file| -> std::result::Result<(Project, slog::Logger), ExitError> {
@@ -113,14 +113,14 @@ fn run_command(logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> 
             let nix_file = match opts.nix_file {
                 Some(f) => f,
                 None => {
-                    slog::info!(logger, "Printing info for `./shell.nix`. If you want info on a different project, pass `--shell-file`");
+                    slog::info!(orig_logger, "Printing info for `./shell.nix`. If you want info on a different project, pass `--shell-file`");
                     PathBuf::from("./shell.nix")
                 }
             };
-            let (project, _logger) = with_project(&nix_file)?;
+            let (project, logger) = with_project(&nix_file)?;
             ops::op_info(&paths, project, &logger)
         }
-        Command::Gc(opts) => ops::op_gc(logger, opts),
+        Command::Gc(opts) => ops::op_gc(orig_logger, opts),
         Command::Direnv(opts) => {
             let (project, logger) = with_project(&opts.nix_file)?;
             ops::op_direnv(
@@ -141,18 +141,20 @@ fn run_command(logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> 
         }
         Command::Daemon(opts) => {
             install_signal_handler();
-            ops::op_daemon(opts, logger)
+            ops::op_daemon(opts, orig_logger)
         }
-        Command::Upgrade(opts) => ops::op_upgrade(opts, paths.cas_store(), logger),
-        Command::Init => ops::op_init(logger),
+        Command::Upgrade(opts) => ops::op_upgrade(opts, paths.cas_store(), orig_logger),
+        Command::Init => ops::op_init(orig_logger),
 
         Command::Internal { command } => match command {
             Internal_::Ping_(opts) => {
                 let nix_file = find_nix_file(&opts.nix_file)?;
-                ops::op_ping(&paths, nix_file, logger)
+                ops::op_ping(&paths, nix_file, orig_logger)
             }
-            Internal_::StartUserShell_(opts) => ops::op_start_user_shell(paths.cas_store(), opts),
-            Internal_::StreamEvents_(se) => ops::op_stream_events(&paths, se.kind, logger),
+            Internal_::StartUserShell_(opts) => {
+                ops::op_start_user_shell(orig_logger, paths.cas_store(), opts)
+            }
+            Internal_::StreamEvents_(se) => ops::op_stream_events(&paths, se.kind, orig_logger),
         },
     }
 }
