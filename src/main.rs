@@ -89,7 +89,7 @@ fn find_nix_file(shellfile: &Path) -> Result<NixFile, ExitError> {
 }
 
 fn create_project(paths: &constants::Paths, shell_nix: NixFile) -> Result<Project, ExitError> {
-    Project::new(shell_nix, paths.gc_root_dir()).map_err(|err| {
+    Project::new_and_gc_nix_files(shell_nix, paths.gc_root_dir()).map_err(|err| {
         ExitError::temporary(anyhow::anyhow!(err).context("Could not set up project paths"))
     })
 }

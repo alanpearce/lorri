@@ -187,7 +187,7 @@ impl Daemon {
         // For each build instruction, add the corresponding file
         // to the watch list.
         for IndicateActivity { nix_file, rebuild } in rx_activity {
-            let project = crate::project::Project::new(nix_file, gc_root_dir)
+            let project = crate::project::Project::new_and_gc_nix_files(nix_file, gc_root_dir)
                 // TODO: the project needs to create its gc root dir
                 .unwrap();
 

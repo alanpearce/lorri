@@ -72,7 +72,7 @@ fn project(name: &str, cache_dir: &AbsPathBuf) -> Project {
         name,
     ]))
     .expect("CARGO_MANIFEST_DIR was not absolute");
-    Project::new(
+    Project::new_and_gc_nix_files(
         NixFile::from(test_root.join("shell.nix")),
         &cache_dir.join("gc_roots"),
     )

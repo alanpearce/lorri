@@ -29,7 +29,10 @@ impl Project {
     /// Construct a `Project` from nix file path
     /// and the base GC root directory
     /// (as returned by `Paths.gc_root_dir()`),
-    pub fn new(nix_file: NixFile, gc_root_dir: &AbsPathBuf) -> std::io::Result<Project> {
+    pub fn new_and_gc_nix_files(
+        nix_file: NixFile,
+        gc_root_dir: &AbsPathBuf,
+    ) -> std::io::Result<Project> {
         let hash = format!(
             "{:x}",
             md5::compute(nix_file.as_absolute_path().as_os_str().as_bytes())
@@ -74,8 +77,8 @@ impl Project {
         &self.hash
     }
 
-    // final path in the `self.gc_root_path` directory,
-    // the symlink which points to the lorri-keep-env-hack-nix-shell drv (see ./logged-evaluation.nix)
+    /// final path in the `self.gc_root_path` directory,
+    /// the symlink which points to the lorri-keep-env-hack-nix-shell drv (see ./logged-evaluation.nix)
     fn shell_gc_root(&self) -> AbsPathBuf {
         self.gc_root_path.join("shell_gc_root")
     }
