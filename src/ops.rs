@@ -962,8 +962,12 @@ fn main_run_once(
 }
 
 /// Print or remove gc roots depending on cli options.
-pub fn op_gc(logger: &slog::Logger, opts: crate::cli::GcOptions) -> Result<(), ExitError> {
-    let infos = project::list_roots(logger)?;
+pub fn op_gc(
+    logger: &slog::Logger,
+    paths: &Paths,
+    opts: crate::cli::GcOptions,
+) -> Result<(), ExitError> {
+    let infos = project::list_roots(logger, paths)?;
     match opts.action {
         cli::GcSubcommand::Info => {
             if opts.json {

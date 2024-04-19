@@ -9,10 +9,10 @@ use rusqlite as sqlite;
 use slog::info;
 use sqlite::named_params;
 
-use crate::{ops::error::ExitError, project::list_roots};
+use crate::{constants::Paths, ops::error::ExitError, project::list_roots};
 
 /// Migrate the GC roots into our sqlite
-pub fn migrate_gc_roots(logger: &slog::Logger) -> Result<(), ExitError> {
+pub fn migrate_gc_roots(logger: &slog::Logger, paths: &Paths) -> Result<(), ExitError> {
     let conn = sqlite::Connection::open_in_memory().expect("cannot open sqlite db");
     conn.execute_batch(
         r#"CREATE TABLE gc_roots(
@@ -23,8 +23,7 @@ pub fn migrate_gc_roots(logger: &slog::Logger) -> Result<(), ExitError> {
             "#,
     )
     .unwrap();
-
-    let infos = list_roots(logger)?;
+    let infos = list_roots(logger, paths)?;
 
     let mut stmt = conn
         .prepare("INSERT INTO gc_roots (nix_file, last_updated) VALUES (:nix_file, :last_updated);")

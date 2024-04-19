@@ -31,8 +31,6 @@ fn main() {
         let logger = logging::root(verbosity);
         debug!(logger, "input options"; "options" => ?opts);
 
-        lorri::sqlite::migrate_gc_roots(&logger).unwrap();
-
         match run_command(&logger, opts) {
             Err(err) => {
                 error!(logger, "{}", err.message());
@@ -98,6 +96,8 @@ fn create_project(paths: &constants::Paths, shell_nix: NixFile) -> Result<Projec
 fn run_command(orig_logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> {
     let paths = lorri::ops::get_paths()?;
 
+    lorri::sqlite::migrate_gc_roots(&orig_logger, &paths).unwrap();
+
     let with_project_resolved =
         |nix_file| -> std::result::Result<(Project, slog::Logger), ExitError> {
             let project = create_project(&lorri::ops::get_paths()?, nix_file)?;
@@ -120,7 +120,7 @@ fn run_command(orig_logger: &slog::Logger, opts: Arguments) -> Result<(), ExitEr
             let (project, logger) = with_project(&nix_file)?;
             ops::op_info(&paths, project, &logger)
         }
-        Command::Gc(opts) => ops::op_gc(orig_logger, opts),
+        Command::Gc(opts) => ops::op_gc(orig_logger, &paths, opts),
         Command::Direnv(opts) => {
             let (project, logger) = with_project(&opts.nix_file)?;
             ops::op_direnv(

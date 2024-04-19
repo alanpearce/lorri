@@ -4,6 +4,7 @@ use slog::debug;
 use thiserror::Error;
 
 use crate::builder::{OutputPath, RootedPath};
+use crate::constants::Paths;
 use crate::ops::error::ExitError;
 use crate::{AbsPathBuf, NixFile};
 use std::ffi::{CString, OsString};
@@ -309,8 +310,7 @@ impl GcRootInfo {
 }
 
 /// Returns a list of existing gc roots along with some metadata
-pub fn list_roots(logger: &slog::Logger) -> Result<Vec<GcRootInfo>, ExitError> {
-    let paths = crate::ops::get_paths()?;
+pub fn list_roots(logger: &slog::Logger, paths: &Paths) -> Result<Vec<GcRootInfo>, ExitError> {
     let mut res = Vec::new();
     let gc_root_dir = paths.gc_root_dir();
     for entry in std::fs::read_dir(gc_root_dir)? {
