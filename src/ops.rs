@@ -48,7 +48,6 @@ use crossbeam_channel as chan;
 
 use itertools::Itertools;
 use serde_json::json;
-use serde_json::Value;
 use slog::{debug, info, warn};
 use thiserror::Error;
 
@@ -977,8 +976,8 @@ pub fn op_gc(
                         .iter()
                         .map(|info| {
                             json!({
-                                "gc_dir": info.gc_dir.to_json_value(),
-                                "nix_file": info.nix_file.as_ref().map_or(Value::Null, |n| path_to_json_string(&n)),
+                                "gc_dir": info.gc_dir.to_json_string(),
+                                "nix_file": info.nix_file.to_json_string(),
                                 "timestamp": info.timestamp,
                                 "alive": info.alive
                             })
@@ -1003,14 +1002,13 @@ pub fn op_gc(
                 .into_iter()
                 .filter(|root| {
                     all || !root.alive
-                        || root
-                            .nix_file
-                            .as_ref()
-                            .map_or(false, |p| files_to_remove.contains(p))
+                        || files_to_remove.contains(root.nix_file.as_path())
                         || older_than.map_or(false, |limit| {
-                            root.timestamp
-                                .elapsed()
-                                .map_or(false, |actual| actual > limit)
+                            match root.timestamp {
+                                // always remove gcroots for which we could not figure out a timestamp
+                                None => true,
+                                Some(t) => t.elapsed().map_or(false, |actual| actual > limit),
+                            }
                         })
                 })
                 .collect();
@@ -1045,7 +1043,7 @@ pub fn op_gc(
                                 // The root we tried to remove
                                 "root": {
                                     "gc_dir": info.gc_dir,
-                                    "nix_file": info.nix_file.map(|p| path_to_json_string(&p)),
+                                    "nix_file": info.nix_file.to_json_string(),
                                     // we use the Serialize instance for SystemTime
                                     "timestamp": info.timestamp,
                                     "alive": info.alive
@@ -1055,7 +1053,7 @@ pub fn op_gc(
                                 "error": null,
                                 "root": {
                                     "gc_dir": info.gc_dir,
-                                    "nix_file": info.nix_file.map(|p| path_to_json_string(&p)),
+                                    "nix_file": info.nix_file.to_json_string(),
                                     // we use the Serialize instance for SystemTime
                                     "timestamp": info.timestamp,
                                     "alive": info.alive

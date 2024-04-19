@@ -19,9 +19,8 @@ pub struct Project {
     /// Absolute path to this project’s nix file.
     pub nix_file: NixFile,
 
-    /// Directory in which this project’s
-    /// garbage collection roots are stored.
-    gc_root_path: AbsPathBuf,
+    // Directory in which this project’s info is stored.
+    project_root_dir: AbsPathBuf,
 
     /// Hash of the nix file’s absolute path.
     hash: String,
@@ -39,7 +38,7 @@ impl Project {
 
         // Adjust the nix_file symlink to point to this project’s nix file
 
-        let nix_file_symlink = p.nix_file();
+        let nix_file_symlink = p.nix_file_backlink();
         let (remove, create) = match std::fs::read_link(&nix_file_symlink) {
             Ok(path) => {
                 if path == nix_file.as_absolute_path() {
@@ -71,13 +70,33 @@ impl Project {
             "{:x}",
             md5::compute(nix_file.as_absolute_path().as_os_str().as_bytes())
         );
-        let project_gc_root = gc_root_dir.join(&hash).join("gc_root");
+        let project_root_dir = gc_root_dir.join(&hash);
 
-        std::fs::create_dir_all(&project_gc_root)?;
+        std::fs::create_dir_all(&project_root_dir.join("gc_root"))?;
 
         Ok(Project {
+            project_root_dir,
             nix_file,
-            gc_root_path: project_gc_root,
+            hash,
+        })
+    }
+
+    /// If the hash for our gc directory is already known, create a project by resolving the nix file via its symlink.
+    fn new_internal_from_existing_gc_dir(
+        hash: String,
+        gc_root_dir: &AbsPathBuf,
+    ) -> Result<Project, anyhow::Error> {
+        let project_root_dir = gc_root_dir.join(&hash);
+
+        let nix_file_symlink = project_root_dir.join("gc_root").join("nix_file");
+        let nix_file = NixFile(
+            AbsPathBuf::new(std::fs::read_link(&nix_file_symlink)?)
+                .expect("nix_file symlink is a relative path, this should not happen"),
+        );
+
+        Ok(Project {
+            project_root_dir,
+            nix_file,
             hash,
         })
     }
@@ -87,21 +106,38 @@ impl Project {
         &self.hash
     }
 
+    /// Directory in which this project’s
+    /// garbage collection roots are stored.
+    fn gc_root_path(&self) -> AbsPathBuf {
+        self.project_root_dir.join("gc_root")
+    }
+
     /// final path in the `self.gc_root_path` directory,
     /// the symlink which points to the lorri-keep-env-hack-nix-shell drv (see ./logged-evaluation.nix)
     fn shell_gc_root(&self) -> AbsPathBuf {
-        self.gc_root_path.join("shell_gc_root")
+        self.gc_root_path().join("shell_gc_root")
     }
 
     /// A symlink from our gc_root_path directory back to the nix file which created this project.
     /// Used to implement garbage collection.
-    fn nix_file(&self) -> AbsPathBuf {
-        self.gc_root_path.join("nix_file")
+    fn nix_file_backlink(&self) -> AbsPathBuf {
+        self.gc_root_path().join("nix_file")
     }
 
     /// Return the filesystem paths for these roots.
     pub fn root_path(&self) -> OutputPath {
         OutputPath::new(RootPath(self.shell_gc_root()))
+    }
+
+    /// Get the timestamp for when this project was last built, if it was.
+    pub fn last_built_timestamp(&self) -> Option<SystemTime> {
+        match std::fs::symlink_metadata(self.shell_gc_root()) {
+            Err(_) => {
+                // no gc root, so nothing to report
+                None
+            }
+            Ok(m) => m.modified().map_or(None, Some),
+        }
     }
 
     /// Create roots to store paths.
@@ -184,40 +220,31 @@ where {
             res
         };
         for project_gc_root_dir in project_gc_root_dirs {
-            let gc_dir = AbsPathBuf::new(project_gc_root_dir.path())
-                .expect("entry.path() should always be absolute");
-            let gc_root_dir = gc_dir.join("gc_root");
-            if !std::fs::metadata(&gc_root_dir).map_or(false, |m| m.is_dir()) {
-                debug!(
-                    logger,
-                    "Skipping {} which should be a directory",
-                    gc_root_dir.display()
-                );
-                continue;
-            };
-            let timestamp = match std::fs::symlink_metadata(gc_root_dir.join("shell_gc_root")) {
-                Err(_) => {
-                    // no gc root, so nothing to report
-                    continue;
-                }
-                Ok(m) => m.modified().unwrap_or(std::time::UNIX_EPOCH),
-            };
-            let nix_file_symlink = gc_root_dir.join("nix_file");
-            let nix_file = std::fs::read_link(&nix_file_symlink);
-            let alive = match &nix_file {
-                Err(_) => false,
-                Ok(path) => match std::fs::metadata(path) {
-                    Ok(m) => m.is_file(),
-                    Err(_) => false,
-                },
-            };
-            let nix_file = match nix_file {
-                Err(_) => None,
-                Ok(p) => Some(p),
-            };
+            let hash = project_gc_root_dir
+                .file_name()
+                .to_string_lossy()
+                .into_owned();
+            let project =
+                match Project::new_internal_from_existing_gc_dir(hash.clone(), paths.gc_root_dir())
+                {
+                    Err(e) => {
+                        warn!(
+                            logger,
+                            "Could not create project for hash {} in root dir {}, skipping: {}",
+                            &hash,
+                            paths.gc_root_dir().display(),
+                            e
+                        );
+                        continue;
+                    }
+                    Ok(p) => p,
+                };
+            let timestamp = project.last_built_timestamp();
+
+            let alive = project.nix_file.as_absolute_path().is_file();
             res.push(GcRootInfo {
-                gc_dir,
-                nix_file,
+                gc_dir: project.project_root_dir.clone(),
+                nix_file: project.nix_file.0,
                 timestamp,
                 alive,
             });
@@ -231,9 +258,9 @@ pub struct GcRootInfo {
     /// directory where root is stored
     pub gc_dir: AbsPathBuf,
     /// nix file from which the root originates. If None, then the root is considered dead.
-    pub nix_file: Option<PathBuf>,
+    pub nix_file: AbsPathBuf,
     /// timestamp of the last build
-    pub timestamp: SystemTime,
+    pub timestamp: Option<SystemTime>,
     /// whether `nix_file` still exists
     pub alive: bool,
 }
@@ -241,13 +268,11 @@ pub struct GcRootInfo {
 impl GcRootInfo {
     /// Format for printing to stdout
     pub fn format_pretty_oneline(&self) -> String {
-        let target = match &self.nix_file {
-            Some(p) => p.display().to_string(),
-            None => "(?)".to_owned(),
-        };
-        let age = match self.timestamp.elapsed() {
-            Err(_) => "future".to_owned(),
-            Ok(d) => {
+        let target = self.nix_file.display().to_string();
+        let age = match self.timestamp.map(|t| t.elapsed()) {
+            None => "sometime in the past".to_string(),
+            Some(Err(_)) => "future".to_string(),
+            Some(Ok(d)) => {
                 let days = d.as_secs() / (24 * 60 * 60);
                 format!("{} days ago", days)
             }

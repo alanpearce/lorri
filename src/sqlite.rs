@@ -29,13 +29,13 @@ pub fn migrate_gc_roots(logger: &slog::Logger, paths: &Paths) -> Result<(), Exit
         .prepare("INSERT INTO gc_roots (nix_file, last_updated) VALUES (:nix_file, :last_updated);")
         .unwrap();
     for info in infos {
-        let ts = info
-            .timestamp
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("expect file timestamp to be a unix timestamp")
-            .as_secs();
+        let ts = info.timestamp.map(|t| {
+            t.duration_since(SystemTime::UNIX_EPOCH)
+                .expect("expect file timestamp to be a unix timestamp")
+                .as_secs()
+        });
         stmt.execute(named_params! {
-            ":nix_file": info.nix_file.map(|pb| pb.as_os_str().as_bytes().to_owned()),
+            ":nix_file": info.nix_file.0.as_os_str().as_bytes().to_owned(),
             ":last_updated": ts
         })
         .expect("cannot insert");
