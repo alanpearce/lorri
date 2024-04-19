@@ -28,7 +28,7 @@ pub fn migrate_gc_roots(logger: &slog::Logger, paths: &Paths) -> Result<(), Exit
     let mut stmt = conn
         .prepare("INSERT INTO gc_roots (nix_file, last_updated) VALUES (:nix_file, :last_updated);")
         .unwrap();
-    for info in infos {
+    for (info, _project) in infos {
         let ts = info.timestamp.map(|t| {
             t.duration_since(SystemTime::UNIX_EPOCH)
                 .expect("expect file timestamp to be a unix timestamp")
