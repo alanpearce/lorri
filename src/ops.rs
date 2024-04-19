@@ -967,7 +967,7 @@ pub fn op_gc(
     paths: &Paths,
     opts: crate::cli::GcOptions,
 ) -> Result<(), ExitError> {
-    let infos = project::list_roots(logger, paths)?;
+    let infos = Project::list_roots(logger, paths)?;
     match opts.action {
         cli::GcSubcommand::Info => {
             if opts.json {
