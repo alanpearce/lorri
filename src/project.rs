@@ -33,15 +33,11 @@ impl Project {
         nix_file: NixFile,
         gc_root_dir: &AbsPathBuf,
     ) -> std::io::Result<Project> {
-        let hash = format!(
-            "{:x}",
-            md5::compute(nix_file.as_absolute_path().as_os_str().as_bytes())
-        );
-        let project_gc_root = gc_root_dir.join(&hash).join("gc_root");
+        let p = Self::new_internal(nix_file.clone(), gc_root_dir)?;
 
-        std::fs::create_dir_all(&project_gc_root)?;
+        // Adjust the nix_file symlink to point to this project’s nix file
 
-        let nix_file_symlink = project_gc_root.clone().join("nix_file");
+        let nix_file_symlink = p.nix_file();
         let (remove, create) = match std::fs::read_link(&nix_file_symlink) {
             Ok(path) => {
                 if path == nix_file.as_absolute_path() {
@@ -62,8 +58,20 @@ impl Project {
             std::fs::remove_file(&nix_file_symlink)?;
         }
         if create {
-            std::os::unix::fs::symlink(nix_file.as_absolute_path(), nix_file_symlink)?;
+            std::os::unix::fs::symlink(nix_file.as_absolute_path(), &nix_file_symlink)?;
         }
+
+        Ok(p)
+    }
+
+    fn new_internal(nix_file: NixFile, gc_root_dir: &AbsPathBuf) -> std::io::Result<Project> {
+        let hash = format!(
+            "{:x}",
+            md5::compute(nix_file.as_absolute_path().as_os_str().as_bytes())
+        );
+        let project_gc_root = gc_root_dir.join(&hash).join("gc_root");
+
+        std::fs::create_dir_all(&project_gc_root)?;
 
         Ok(Project {
             nix_file,
@@ -81,6 +89,12 @@ impl Project {
     /// the symlink which points to the lorri-keep-env-hack-nix-shell drv (see ./logged-evaluation.nix)
     fn shell_gc_root(&self) -> AbsPathBuf {
         self.gc_root_path.join("shell_gc_root")
+    }
+
+    /// A symlink from our gc_root_path directory back to the nix file which created this project.
+    /// Used to implement garbage collection.
+    fn nix_file(&self) -> AbsPathBuf {
+        self.gc_root_path.join("nix_file")
     }
 
     /// Return the filesystem paths for these roots.
