@@ -117,8 +117,8 @@ pub fn op_direnv<W: std::io::Write>(
 ) -> Result<(), ExitError> {
     check_direnv_version()?;
 
-    let root_paths = project.root_paths();
-    let paths_are_cached: bool = root_paths.all_exist();
+    let root_paths = project.root_path();
+    let paths_are_cached: bool = root_paths.exists();
 
     let ping_sent = {
         let address = crate::ops::get_paths()?.daemon_socket_file().clone();
@@ -177,7 +177,7 @@ watch_file "{}"
 watch_file "$EVALUATION_ROOT"
 
 {}"#,
-        root_paths.shell_gc_root.display(),
+        root_paths.display_shell_gc_root(),
         crate::ops::get_paths()?
             .daemon_socket_file()
             .as_path()
@@ -241,8 +241,7 @@ where
 /// See the documentation for lorri::cli::Command::Info for more
 /// details.
 pub fn op_info(paths: &Paths, project: Project, logger: &slog::Logger) -> Result<(), ExitError> {
-    let root_paths = project.root_paths();
-    let OutputPath { shell_gc_root } = &root_paths;
+    let root_path = project.root_path();
     let daemon_status =
         match client::create::<client::DaemonInfo>(paths, client::Timeout::from_millis(50), logger)
         {
@@ -253,8 +252,8 @@ pub fn op_info(paths: &Paths, project: Project, logger: &slog::Logger) -> Result
             },
         };
 
-    let gc_root = if root_paths.all_exist() {
-        format!("{}", shell_gc_root.0.display())
+    let gc_root = if root_path.exists() {
+        format!("{}", root_path.display_shell_gc_root())
     } else {
         "GC roots do not exist. Has the project been built with lorri yet?".to_string()
     };
@@ -372,12 +371,12 @@ pub fn op_shell(
     let username = project::Username::from_env_var().map_err(ExitError::environment_problem)?;
     let nix_gc_root_user_dir = project::NixGcRootUserDir::get_or_create(&username)?;
     let cached = {
-        if !project.root_paths().all_exist() {
+        if !project.root_path().exists() {
             Err(ExitError::temporary(anyhow::anyhow!(
                 "project has not previously been built successfully",
             )))
         } else {
-            Ok(project.root_paths().shell_gc_root.0.as_path().to_owned())
+            Ok(project.root_path())
         }
     };
     let mut bash_cmd = bash_cmd(
@@ -421,7 +420,7 @@ fn build_root(
     nix_gc_root_user_dir: NixGcRootUserDir,
     cas: &ContentAddressable,
     logger: &slog::Logger,
-) -> Result<PathBuf, ExitError> {
+) -> Result<OutputPath, ExitError> {
     let logger2 = logger.clone();
     let project2 = project.clone();
     let cas2 = cas.clone();
@@ -495,16 +494,12 @@ fn build_root(
         .create_roots(run_result, nix_gc_root_user_dir, &logger)
         .map_err(|e| {
             ExitError::temporary(anyhow::Error::new(e).context("rooting the environment failed"))
-        })?
-        .shell_gc_root
-        .0
-        .as_path()
-        .to_owned())
+        })?)
 }
 
 /// Instantiates a `Command` to start bash.
 pub fn bash_cmd(
-    project_root: PathBuf,
+    project_root: OutputPath,
     cas: &ContentAddressable,
     logger: &slog::Logger,
 ) -> Result<Command, ExitError> {
@@ -514,7 +509,7 @@ pub fn bash_cmd(
 EVALUATION_ROOT="{}"
 
 {}"#,
-            project_root.display(),
+            project_root.display_shell_gc_root(),
             include_str!("./ops/direnv/envrc.bash")
         ))
         .expect("failed to write shell output");
@@ -716,9 +711,7 @@ pub fn op_stream_events(
                             Event::Completed { nix_file, rooted_output_paths } => json!({
                               "Completed": {
                                 "nix_file": nix_file.to_json_value(),
-                                "rooted_output_paths": {
-                                    "shell_gc_root": rooted_output_paths.shell_gc_root.0.to_json_value()
-                                }
+                                "rooted_output_paths": rooted_output_paths.to_json_value()
                               }
                             }),
                             Event::Failure { nix_file, failure } => json!({

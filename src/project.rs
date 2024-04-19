@@ -81,7 +81,7 @@ impl Project {
     }
 
     /// Generate a "unique" ID for this project based on its absolute path.
-    pub fn hash(&self) -> &str {
+    fn hash(&self) -> &str {
         &self.hash
     }
 
@@ -98,10 +98,8 @@ impl Project {
     }
 
     /// Return the filesystem paths for these roots.
-    pub fn root_paths(&self) -> OutputPath {
-        OutputPath {
-            shell_gc_root: RootPath(self.shell_gc_root()),
-        }
+    pub fn root_path(&self) -> OutputPath {
+        OutputPath::new(RootPath(self.shell_gc_root()))
     }
 
     /// Create roots to store paths.
@@ -148,10 +146,7 @@ where {
                 )
             })?;
 
-        // TODO: don’t return the RootPath here
-        Ok(OutputPath {
-            shell_gc_root: RootPath(self.shell_gc_root()),
-        })
+        Ok(OutputPath::new(RootPath(self.shell_gc_root())))
     }
 }
 
@@ -163,15 +158,6 @@ impl RootPath {
     /// `display` the path.
     pub fn display(&self) -> std::path::Display {
         self.0.display()
-    }
-}
-
-impl OutputPath {
-    /// Check whether all all GC roots exist.
-    pub fn all_exist(&self) -> bool {
-        let crate::builder::OutputPath { shell_gc_root } = self;
-
-        shell_gc_root.0.as_path().exists()
     }
 }
 

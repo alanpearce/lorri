@@ -1,3 +1,4 @@
+use lorri::builder::OutputPath;
 use lorri::project;
 use lorri::{
     builder, cas::ContentAddressable, nix::options::NixOptions, ops, project::Project, AbsPathBuf,
@@ -79,7 +80,7 @@ fn project(name: &str, cache_dir: &AbsPathBuf) -> Project {
     .unwrap()
 }
 
-fn build(project: &Project, cas: &ContentAddressable, logger: &slog::Logger) -> PathBuf {
+fn build(project: &Project, cas: &ContentAddressable, logger: &slog::Logger) -> OutputPath {
     project
         .create_roots(
             builder::instantiate_and_build(&project.nix_file, cas, &NixOptions::empty(), logger)
@@ -90,8 +91,4 @@ fn build(project: &Project, cas: &ContentAddressable, logger: &slog::Logger) -> 
             logger,
         )
         .unwrap()
-        .shell_gc_root
-        .0
-        .as_path()
-        .to_owned()
 }
