@@ -647,12 +647,6 @@ impl FromStr for EventKind {
     }
 }
 
-/// Just expose the error message for now.
-#[derive(Serialize)]
-struct StreamBuildError {
-    message: String,
-}
-
 /// Run to output a stream of build events in a machine-parseable form.
 ///
 /// See the documentation for lorri::cli::Command::StreamEvents_ for more
@@ -966,7 +960,6 @@ fn main_run_once(
     }
 }
 
-#[derive(Serialize)]
 /// Represents a gc root along with some metadata, used for json output of lorri gc info
 struct GcRootInfo {
     /// directory where root is stored
@@ -1136,11 +1129,23 @@ pub fn op_gc(logger: &slog::Logger, opts: crate::cli::GcOptions) -> Result<(), E
                                 // Error, if any
                                 "error": err,
                                 // The root we tried to remove
-                                "root": info
+                                "root": {
+                                    "gc_dir": info.gc_dir,
+                                    "nix_file": info.nix_file.map(|p| path_to_json_string(&p)),
+                                    // we use the Serialize instance for SystemTime
+                                    "timestamp": info.timestamp,
+                                    "alive": info.alive
+                                }
                             }),
                             Ok(info) => json!({
                                 "error": null,
-                                "root": info
+                                "root": {
+                                    "gc_dir": info.gc_dir,
+                                    "nix_file": info.nix_file.map(|p| path_to_json_string(&p)),
+                                    // we use the Serialize instance for SystemTime
+                                    "timestamp": info.timestamp,
+                                    "alive": info.alive
+                                }
                             }),
                         })
                         .collect::<Vec<_>>();
@@ -1167,15 +1172,6 @@ pub fn op_gc(logger: &slog::Logger, opts: crate::cli::GcOptions) -> Result<(), E
         }
     }
     Ok(())
-}
-
-#[derive(Serialize)]
-/// How removing a gc root went, for json ouput
-struct RemovalStatus {
-    /// What error was encountered, or success
-    error: Option<String>,
-    /// The root we tried to remove
-    root: GcRootInfo,
 }
 
 fn main_run_forever(
