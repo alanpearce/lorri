@@ -96,6 +96,7 @@ fn create_project(paths: &constants::Paths, shell_nix: NixFile) -> Result<Projec
 fn run_command(orig_logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> {
     let paths = lorri::ops::get_paths()?;
 
+    // TODO: TMP
     lorri::sqlite::migrate_gc_roots(&orig_logger, &paths).unwrap();
 
     let with_project_resolved =
