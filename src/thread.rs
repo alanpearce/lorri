@@ -226,7 +226,7 @@ mod tests {
                             println!("2: timed out, returning result");
                             Ok("2: otherresult")
                         }
-                        recv(chan::after(Duration::from_millis(10))) -> _ => {
+                        recv(chan::after(Duration::from_millis(25))) -> _ => {
                             match two_msg_tx {
                                 Some(tx) => tx.send(()).unwrap(),
                                 None => {}
