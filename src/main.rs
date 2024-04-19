@@ -3,6 +3,7 @@ use lorri::logging;
 use lorri::ops;
 use lorri::ops::error::ExitError;
 use lorri::project::Project;
+use lorri::sqlite::Sqlite;
 use lorri::NixFile;
 use lorri::{constants, AbsPathBuf};
 use slog::{debug, error, o};
@@ -95,9 +96,10 @@ fn create_project(paths: &constants::Paths, shell_nix: NixFile) -> Result<Projec
 /// Run the main function of the relevant command.
 fn run_command(orig_logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> {
     let paths = lorri::ops::get_paths()?;
+    let conn = Sqlite::new_connection(&paths.sqlite_db);
 
     // TODO: TMP
-    lorri::sqlite::migrate_gc_roots(&orig_logger, &paths).unwrap();
+    conn.migrate_gc_roots(&orig_logger, &paths).unwrap();
 
     let with_project_resolved =
         |nix_file| -> std::result::Result<(Project, slog::Logger), ExitError> {
