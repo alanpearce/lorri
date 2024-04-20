@@ -90,16 +90,16 @@ fn find_nix_file(shellfile: &Path) -> Result<NixFile, ExitError> {
 /// Run the main function of the relevant command.
 fn run_command(orig_logger: &slog::Logger, opts: Arguments) -> Result<(), ExitError> {
     let paths = lorri::ops::get_paths()?;
-    let mut conn = Sqlite::new_connection(&paths.sqlite_db);
+    let conn = Sqlite::new_connection(&paths.sqlite_db)?;
 
     // TODO: TMP
     conn.migrate_gc_roots(&orig_logger, &paths).unwrap();
 
-    let mut with_project_resolved =
-        |nix_file| -> std::result::Result<(Project, slog::Logger), ExitError> {
+    let with_project_resolved =
+        |nix_file: NixFile| -> std::result::Result<(Project, slog::Logger), ExitError> {
             let project = {
                 let paths = &lorri::ops::get_paths()?;
-                Project::new_and_gc_nix_files(&mut conn, nix_file, paths.gc_root_dir()).map_err(
+                Project::new_and_gc_nix_files(conn, nix_file.clone(), paths.gc_root_dir()).map_err(
                     |err| {
                         ExitError::temporary(
                             anyhow::anyhow!(err).context("Could not set up project paths"),
@@ -110,7 +110,7 @@ fn run_command(orig_logger: &slog::Logger, opts: Arguments) -> Result<(), ExitEr
             let logger = orig_logger.new(o!("nix_file" => project.nix_file.clone()));
             Ok((project, logger))
         };
-    let mut with_project = |nix_file| -> std::result::Result<(Project, slog::Logger), ExitError> {
+    let with_project = |nix_file| -> std::result::Result<(Project, slog::Logger), ExitError> {
         with_project_resolved(find_nix_file(nix_file)?)
     };
 

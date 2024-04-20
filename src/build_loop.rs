@@ -60,9 +60,9 @@ pub enum Reason {
 /// If a build is ongoing, it will finish the build first.
 /// If there was intermediate requests for new builds, it will schedule a build to be run right after.
 /// Additionally, we create GC roots for the build results.
-pub struct BuildLoop<'a> {
+pub struct BuildLoop {
     /// Project to be built.
-    project: &'a Project,
+    project: Project,
     /// Extra options to pass to each nix invocation
     extra_nix_options: NixOptions,
     /// Watches all input files for changes.
@@ -102,19 +102,19 @@ impl BuildState {
     }
 }
 
-impl<'a> BuildLoop<'a> {
+impl BuildLoop {
     /// Instatiate a new BuildLoop. Uses an internal filesystem
     /// watching implementation.
     ///
     /// Will start by only watching the project’s nix file,
     /// and then add new files after each nix run.
     pub fn new(
-        project: &'a Project,
+        project: Project,
         extra_nix_options: NixOptions,
         nix_gc_root_user_dir: project::NixGcRootUserDir,
         cas: ContentAddressable,
         logger: slog::Logger,
-    ) -> anyhow::Result<BuildLoop<'a>> {
+    ) -> anyhow::Result<BuildLoop> {
         let mut watch = Watch::try_new(logger.clone()).map_err(|err| anyhow!(err))?;
         watch
             .extend(vec![WatchPathBuf::Normal(

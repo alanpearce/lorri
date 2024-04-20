@@ -42,13 +42,10 @@ impl DirenvTestCase {
         let shell_file = NixFile::from(AbsPathBuf::new(test_root.join("shell.nix")).unwrap());
 
         let cas = ContentAddressable::new(cachedir.join("cas").to_owned()).unwrap();
-        let mut conn = Sqlite::new_connection(&cachedir.join("sqlite"));
-        let project = Project::new_and_gc_nix_files(
-            &mut conn,
-            shell_file.clone(),
-            &cachedir.join("gc_roots"),
-        )
-        .unwrap();
+        let conn = Sqlite::new_connection(&cachedir.join("sqlite")).unwrap();
+        let project =
+            Project::new_and_gc_nix_files(conn, shell_file.clone(), &cachedir.join("gc_roots"))
+                .unwrap();
 
         DirenvTestCase {
             projectdir,
@@ -63,7 +60,7 @@ impl DirenvTestCase {
     pub fn evaluate(&mut self) -> Result<builder::OutputPath, BuildError> {
         let username = project::Username::from_env_var().unwrap();
         BuildLoop::new(
-            &self.project,
+            self.project.clone().unwrap(),
             NixOptions::empty(),
             project::NixGcRootUserDir::get_or_create(&username).unwrap(),
             self.cas.clone(),
@@ -78,7 +75,7 @@ impl DirenvTestCase {
     pub fn get_direnv_variables(&self) -> DirenvEnv {
         let envrc = File::create(self.projectdir.path().join(".envrc")).unwrap();
         let paths = lorri::ops::get_paths().unwrap();
-        ops::op_direnv(self.project.clone(), &paths, envrc, &self.logger).unwrap();
+        ops::op_direnv(self.project.clone().unwrap(), &paths, envrc, &self.logger).unwrap();
 
         {
             let mut allow = self.direnv_cmd();

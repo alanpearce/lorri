@@ -28,7 +28,7 @@ fn cargo_bin(name: &str) -> PathBuf {
 fn loads_env() {
     let tempdir = tempfile::tempdir().expect("tempfile::tempdir() failed us!");
     let cache_dir = &lorri::AbsPathBuf::new(tempdir.path().to_owned()).unwrap();
-    let mut conn = Sqlite::new_connection(&cache_dir.join("sqlite"));
+    let conn = Sqlite::new_connection(&cache_dir.join("sqlite")).unwrap();
     let project = {
         let test_root = AbsPathBuf::new(PathBuf::from_iter(&[
             env!("CARGO_MANIFEST_DIR"),
@@ -38,7 +38,7 @@ fn loads_env() {
         ]))
         .expect("CARGO_MANIFEST_DIR was not absolute");
         Project::new_and_gc_nix_files(
-            &mut conn,
+            conn,
             NixFile::from(test_root.join("shell.nix")),
             &cache_dir.join("gc_roots"),
         )

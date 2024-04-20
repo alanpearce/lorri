@@ -17,7 +17,6 @@ use std::time::SystemTime;
 
 /// A “project” knows how to handle the lorri state
 /// for a given nix file.
-#[derive(Clone)]
 pub struct Project {
     /// Absolute path to this project’s nix file.
     pub nix_file: NixFile,
@@ -27,6 +26,8 @@ pub struct Project {
 
     /// Hash of the nix file’s absolute path.
     hash: String,
+
+    conn: Sqlite,
 }
 
 impl Project {
@@ -34,11 +35,11 @@ impl Project {
     /// and the base GC root directory
     /// (as returned by `Paths.gc_root_dir()`),
     pub fn new_and_gc_nix_files(
-        conn: &mut Sqlite,
+        mut conn: Sqlite,
         nix_file: NixFile,
         gc_root_dir: &AbsPathBuf,
     ) -> anyhow::Result<Project> {
-        let p = Self::new_internal(nix_file.clone(), gc_root_dir)?;
+        let p = Self::new_internal(nix_file.clone(), gc_root_dir, conn.clone()?)?;
 
         // Adjust the nix_file symlink to point to this project’s nix file
         conn.in_transaction(|t| {
@@ -78,7 +79,11 @@ impl Project {
         })?
     }
 
-    fn new_internal(nix_file: NixFile, gc_root_dir: &AbsPathBuf) -> std::io::Result<Project> {
+    fn new_internal(
+        nix_file: NixFile,
+        gc_root_dir: &AbsPathBuf,
+        conn: Sqlite,
+    ) -> std::io::Result<Project> {
         let hash = format!(
             "{:x}",
             md5::compute(nix_file.as_absolute_path().as_os_str().as_bytes())
@@ -91,6 +96,7 @@ impl Project {
             project_root_dir,
             nix_file,
             hash,
+            conn,
         })
     }
 
@@ -98,6 +104,7 @@ impl Project {
     fn new_internal_from_existing_gc_dir(
         hash: String,
         gc_root_dir: &AbsPathBuf,
+        conn: Sqlite,
     ) -> Result<Project, anyhow::Error> {
         let project_root_dir = gc_root_dir.join(&hash);
 
@@ -111,6 +118,7 @@ impl Project {
             project_root_dir,
             nix_file,
             hash,
+            conn,
         })
     }
 
@@ -151,6 +159,21 @@ impl Project {
             }
             Ok(m) => m.modified().map_or(None, Some),
         }
+    }
+
+    /// Convert the project to a less juicy representation
+    pub fn into_skeleton(&self) -> ProjectSkeleton {
+        ProjectSkeleton {
+            nix_file: self.nix_file.clone(),
+            project_root_dir: self.project_root_dir.clone(),
+            hash: self.hash.clone(),
+            sqlite_path: self.conn.sqlite_path(),
+        }
+    }
+
+    /// Clone this project via its skeleton
+    pub fn clone(&self) -> Result<Project, rusqlite::Error> {
+        self.into_skeleton().into_project()
     }
 
     /// Create roots to store paths.
@@ -201,8 +224,8 @@ where {
     }
 
     /// Removes this project from lorri. Removes the GC root and consumes the project.
-    pub fn remove_project(self, conn: &mut Sqlite) -> anyhow::Result<()> {
-        conn.in_transaction(|t| {
+    pub fn remove_project(mut self) -> anyhow::Result<()> {
+        self.conn.in_transaction(|t| {
             std::fs::remove_dir_all(&self.project_root_dir).context(format!(
                 "Unable to remove the project directory from {}",
                 self.project_root_dir.display()
@@ -220,6 +243,7 @@ where {
     pub fn list_roots(
         logger: &slog::Logger,
         paths: &Paths,
+        conn: Sqlite,
     ) -> Result<Vec<(GcRootInfo, Self)>, ExitError> {
         let mut res = Vec::new();
         let gc_root_dir_iter = std::fs::read_dir(paths.gc_root_dir()).map_err(|e| {
@@ -256,21 +280,23 @@ where {
                 .file_name()
                 .to_string_lossy()
                 .into_owned();
-            let project =
-                match Project::new_internal_from_existing_gc_dir(hash.clone(), paths.gc_root_dir())
-                {
-                    Err(e) => {
-                        warn!(
-                            logger,
-                            "Could not create project for hash {} in root dir {}, skipping: {}",
-                            &hash,
-                            paths.gc_root_dir().display(),
-                            e
-                        );
-                        continue;
-                    }
-                    Ok(p) => p,
-                };
+            let project = match Project::new_internal_from_existing_gc_dir(
+                hash.clone(),
+                paths.gc_root_dir(),
+                conn.clone()?,
+            ) {
+                Err(e) => {
+                    warn!(
+                        logger,
+                        "Could not create project for hash {} in root dir {}, skipping: {}",
+                        &hash,
+                        paths.gc_root_dir().display(),
+                        e
+                    );
+                    continue;
+                }
+                Ok(p) => p,
+            };
             let timestamp = project.last_built_timestamp();
 
             let alive = project.nix_file.as_absolute_path().is_file();
@@ -285,6 +311,26 @@ where {
             ));
         }
         Ok(res)
+    }
+}
+
+/// A version of a project that can be re-initialized to a Project but transferred across thread boundaries.
+pub struct ProjectSkeleton {
+    nix_file: NixFile,
+    project_root_dir: AbsPathBuf,
+    hash: String,
+    sqlite_path: AbsPathBuf,
+}
+
+impl ProjectSkeleton {
+    /// Restores the skeleton into a Project again
+    pub fn into_project(self) -> rusqlite::Result<Project> {
+        Ok(Project {
+            nix_file: self.nix_file,
+            project_root_dir: self.project_root_dir,
+            hash: self.hash,
+            conn: Sqlite::new_connection(&self.sqlite_path)?,
+        })
     }
 }
 

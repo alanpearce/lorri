@@ -9,6 +9,7 @@ use crate::ops::error::ExitError;
 use crate::socket::communicate;
 use crate::socket::path::SocketPath;
 use crate::sqlite::Sqlite;
+use crate::thread::Pool;
 use crate::{project, AbsPathBuf, NixFile};
 use crossbeam_channel as chan;
 use slog::debug;
@@ -83,7 +84,7 @@ impl Daemon {
             chan::Receiver<IndicateActivity>,
         ) = chan::unbounded();
 
-        let mut pool = crate::thread::Pool::new(logger.clone());
+        let mut pool: Pool<ExitError> = crate::thread::Pool::new(logger.clone());
         let tx_build_events = self.tx_build_events.clone();
 
         let server = server::Server::new(tx_activity, tx_build_events);
@@ -94,7 +95,7 @@ impl Daemon {
         let logger3 = logger.clone();
 
         pool.spawn("accept-loop", move || {
-            server.listen(&socket_path, &logger).map(|n| n.never())
+            server.listen(&socket_path, &logger).map(|n| n.never())?
         })?;
 
         let rx_build_events = self.rx_build_events.clone();
@@ -109,17 +110,17 @@ impl Daemon {
         let gc_root_dir = gc_root_dir.clone();
         let sqlite_path = sqlite_path.clone();
         pool.spawn("build-instruction-handler", move || {
-            let mut conn = Sqlite::new_connection(&sqlite_path);
+            let conn = Sqlite::new_connection(&sqlite_path)?;
             Self::build_instruction_handler(
                 tx_build_events,
                 extra_nix_options,
                 rx_activity,
                 &gc_root_dir,
-                &mut conn,
+                conn,
                 cas,
                 nix_gc_root_user_dir,
                 &logger3,
-            );
+            )?;
             Ok(())
         })?;
 
@@ -182,21 +183,23 @@ impl Daemon {
         extra_nix_options: NixOptions,
         rx_activity: chan::Receiver<IndicateActivity>,
         gc_root_dir: &AbsPathBuf,
-        conn: &mut Sqlite,
+        conn: Sqlite,
         cas: crate::cas::ContentAddressable,
         nix_gc_root_user_dir: project::NixGcRootUserDir,
         logger: &slog::Logger,
-    ) {
+    ) -> Result<(), ExitError> {
         // A thread for each `BuildLoop`, keyed by the nix files listened on.
         let mut handler_threads: HashMap<NixFile, chan::Sender<()>> = HashMap::new();
 
         // For each build instruction, add the corresponding file
         // to the watch list.
         for IndicateActivity { nix_file, rebuild } in rx_activity {
-            let project =
-                crate::project::Project::new_and_gc_nix_files(conn, nix_file, gc_root_dir)
-                    // TODO: the project needs to create its gc root dir
-                    .unwrap();
+            let project = crate::project::Project::new_and_gc_nix_files(
+                conn.clone()?,
+                nix_file.clone(),
+                gc_root_dir,
+            )
+            .map_err(|err| ExitError::panic(err))?;
 
             let key = project.nix_file.clone();
             let project_is_watched = handler_threads.get(&key);
@@ -223,6 +226,7 @@ impl Daemon {
                     let logger = logger.clone();
                     let logger2 = logger.clone();
                     let cas2 = cas.clone();
+                    let nix_file2 = nix_file.clone();
                     // TODO: how to use the pool here?
                     // We cannot just spawn new threads once messages come in,
                     // because then then pool objects is stuck in this loop
@@ -233,7 +237,7 @@ impl Daemon {
                     // pool.spawn(format!("build_loop for {}", nix_file.display()),
                     let _ = std::thread::spawn(move || {
                         match BuildLoop::new(
-                            &project,
+                            project,
                             extra_nix_options,
                             nix_gc_root_user_dir,
                             cas2,
@@ -247,12 +251,12 @@ impl Daemon {
                             {
                                 tx_build_events
                                     .send(LoopHandlerEvent::BuildEvent(Event::Failure {
-                                        nix_file: project.nix_file.clone(),
+                                        nix_file: nix_file2,
                                         failure: crate::builder::BuildError::Io {
                                             msg: err
                                                 .context(format!(
                                                     "could not start the watcher for {}",
-                                                    &project.nix_file.display()
+                                                    nix_file.display()
                                                 ))
                                                 .to_string(),
                                         },
@@ -274,5 +278,6 @@ impl Daemon {
                 }
             }
         }
+        Ok(())
     }
 }

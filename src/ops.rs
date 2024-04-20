@@ -423,14 +423,14 @@ fn build_root(
     logger: &slog::Logger,
 ) -> Result<OutputPath, ExitError> {
     let logger2 = logger.clone();
-    let project2 = project.clone();
+    let nix_file = project.nix_file.clone();
     let cas2 = cas.clone();
 
     let run_result = crate::thread::race(
         logger,
         move |_ignored_stop| {
             Ok(builder::instantiate_and_build(
-                &project2.nix_file,
+                &nix_file,
                 &cas2,
                 &crate::nix::options::NixOptions::empty(),
                 &logger2,
@@ -938,7 +938,7 @@ fn main_run_once(
 ) -> Result<(), ExitError> {
     // TODO: add the ability to pass extra_nix_options to watch
     let mut build_loop = BuildLoop::new(
-        &project,
+        project,
         NixOptions::empty(),
         nix_gc_root_user_dir,
         cas.clone(),
@@ -968,8 +968,8 @@ pub fn op_gc(
     paths: &Paths,
     opts: crate::cli::GcOptions,
 ) -> Result<(), ExitError> {
-    let infos = Project::list_roots(logger, paths)?;
-    let mut conn = Sqlite::new_connection(&paths.sqlite_db);
+    let conn = Sqlite::new_connection(&paths.sqlite_db)?;
+    let infos = Project::list_roots(logger, paths, conn)?;
     match opts.action {
         cli::GcSubcommand::Info => {
             if opts.json {
@@ -1027,7 +1027,7 @@ pub fn op_gc(
                 }
             } else {
                 for (info, project) in to_remove {
-                    match project.remove_project(&mut conn) {
+                    match project.remove_project() {
                         Ok(()) => result.push(Ok(info)),
                         Err(e) => result.push(Err((info, e.to_string()))),
                     }
@@ -1095,11 +1095,12 @@ fn main_run_forever(
     let (tx_ping, rx_ping) = chan::unbounded();
     let logger2 = logger.clone();
     let cas2 = cas.clone();
+    let project2 = project.into_skeleton();
     // TODO: add the ability to pass extra_nix_options to watch
     let build_thread = {
         Async::run(logger, move || {
             match BuildLoop::new(
-                &project,
+                project2.into_project()?,
                 NixOptions::empty(),
                 nix_gc_root_user_dir,
                 cas2,

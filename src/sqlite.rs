@@ -10,28 +10,47 @@ use crate::{constants::Paths, ops::error::ExitError, project::Project, AbsPathBu
 /// TODO
 pub struct Sqlite {
     conn: sqlite::Connection,
+    sqlite_path: AbsPathBuf,
 }
 
 impl Sqlite {
     /// Connect to sqlite
-    pub fn new_connection(sqlite_path: &AbsPathBuf) -> Self {
-        let conn = sqlite::Connection::open(sqlite_path.as_path()).expect("cannot open sqlite db");
-        conn.execute_batch(
+    pub fn new_connection(sqlite_path: &AbsPathBuf) -> sqlite::Result<Self> {
+        let new = Self::new_connection_internal(sqlite_path)?;
+        new.conn.execute_batch(
             r#"CREATE TABLE IF NOT EXISTS gc_roots (
                         id INTEGER PRIMARY KEY,
                         nix_file PATH UNIQUE,
                         last_updated EPOCH_TIME
                 );
                 "#,
-        )
-        .unwrap();
+        )?;
 
-        Self { conn }
+        Ok(new)
+    }
+
+    fn new_connection_internal(sqlite_path: &AbsPathBuf) -> sqlite::Result<Self> {
+        let conn = sqlite::Connection::open(sqlite_path.as_path())?;
+
+        Ok(Self {
+            conn,
+            sqlite_path: sqlite_path.clone(),
+        })
+    }
+
+    /// Clone this by creating a new connection to the database
+    pub fn clone(&self) -> sqlite::Result<Self> {
+        Self::new_connection_internal(&self.sqlite_path)
+    }
+
+    /// Return the path to the sqlite file
+    pub fn sqlite_path(&self) -> AbsPathBuf {
+        self.sqlite_path.clone()
     }
 
     /// Migrate the GC roots into our sqlite
     pub fn migrate_gc_roots(&self, logger: &slog::Logger, paths: &Paths) -> Result<(), ExitError> {
-        let infos = Project::list_roots(logger, paths)?;
+        let infos = Project::list_roots(logger, paths, self.clone()?)?;
 
         self.conn.execute("DELETE FROM gc_roots", ()).unwrap();
 
