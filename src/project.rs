@@ -1,11 +1,14 @@
 //! Wrap a nix file and manage corresponding state.
 
+use anyhow::Context;
+use rusqlite::named_params;
 use slog::{debug, warn};
 use thiserror::Error;
 
 use crate::builder::{OutputPath, RootedPath};
 use crate::constants::Paths;
 use crate::ops::error::ExitError;
+use crate::sqlite::Sqlite;
 use crate::{pretty_time_ago, AbsPathBuf, NixFile};
 use std::ffi::{CString, OsString};
 use std::os::unix::ffi::OsStrExt;
@@ -31,38 +34,48 @@ impl Project {
     /// and the base GC root directory
     /// (as returned by `Paths.gc_root_dir()`),
     pub fn new_and_gc_nix_files(
+        conn: &mut Sqlite,
         nix_file: NixFile,
         gc_root_dir: &AbsPathBuf,
-    ) -> std::io::Result<Project> {
+    ) -> anyhow::Result<Project> {
         let p = Self::new_internal(nix_file.clone(), gc_root_dir)?;
 
         // Adjust the nix_file symlink to point to this project’s nix file
-
-        let nix_file_symlink = p.nix_file_backlink();
-        let (remove, create) = match std::fs::read_link(&nix_file_symlink) {
-            Ok(path) => {
-                if path == nix_file.as_absolute_path() {
-                    (false, false)
-                } else {
-                    (true, true)
+        conn.in_transaction(|t| {
+            dbg!("inserting new project into db for {}", p.nix_file.display());
+            t.execute(
+                r#"
+              INSERT INTO gc_roots (nix_file)
+              VALUES (:nix_file)
+              ON CONFLICT (nix_file) DO NOTHING
+            "#,
+                named_params!(":nix_file": p.nix_file.to_sql()),
+            )?;
+            let nix_file_symlink = p.nix_file_backlink();
+            let (remove, create) = match std::fs::read_link(&nix_file_symlink) {
+                Ok(path) => {
+                    if path == nix_file.as_absolute_path() {
+                        (false, false)
+                    } else {
+                        (true, true)
+                    }
                 }
-            }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    (false, true)
-                } else {
-                    (true, true)
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        (false, true)
+                    } else {
+                        (true, true)
+                    }
                 }
+            };
+            if remove {
+                std::fs::remove_file(&nix_file_symlink)?;
+            };
+            if create {
+                std::os::unix::fs::symlink(nix_file.as_absolute_path(), &nix_file_symlink)?;
             }
-        };
-        if remove {
-            std::fs::remove_file(&nix_file_symlink)?;
-        }
-        if create {
-            std::os::unix::fs::symlink(nix_file.as_absolute_path(), &nix_file_symlink)?;
-        }
-
-        Ok(p)
+            Ok(p)
+        })?
     }
 
     fn new_internal(nix_file: NixFile, gc_root_dir: &AbsPathBuf) -> std::io::Result<Project> {
@@ -188,8 +201,19 @@ where {
     }
 
     /// Removes this project from lorri. Removes the GC root and consumes the project.
-    pub fn remove_project(self) -> std::io::Result<()> {
-        std::fs::remove_dir_all(self.project_root_dir)
+    pub fn remove_project(self, conn: &mut Sqlite) -> anyhow::Result<()> {
+        conn.in_transaction(|t| {
+            std::fs::remove_dir_all(&self.project_root_dir).context(format!(
+                "Unable to remove the project directory from {}",
+                self.project_root_dir.display()
+            ))?;
+
+            t.execute(
+                "DELETE FROM gc_roots WHERE nix_file = :nix_file",
+                named_params!(":nix_file": self.nix_file.to_sql()),
+            )?;
+            Ok(())
+        })?
     }
 
     /// Returns a list of existing gc roots along with some metadata

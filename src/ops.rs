@@ -26,6 +26,7 @@ use crate::project::GcRootInfo;
 use crate::project::{NixGcRootUserDir, Project};
 use crate::run_async::Async;
 use crate::socket::path::SocketPath;
+use crate::sqlite::Sqlite;
 use crate::NixFile;
 use crate::VERSION_BUILD_REV;
 use crate::{builder, project};
@@ -93,6 +94,7 @@ pub fn op_daemon(opts: crate::cli::DaemonOptions, logger: &slog::Logger) -> Resu
     let paths = crate::ops::get_paths()?;
     daemon.serve(
         &SocketPath::from(paths.daemon_socket_file().clone()),
+        &paths.sqlite_db,
         paths.gc_root_dir(),
         paths.cas_store().clone(),
         nix_gc_root_user_dir,
@@ -967,6 +969,7 @@ pub fn op_gc(
     opts: crate::cli::GcOptions,
 ) -> Result<(), ExitError> {
     let infos = Project::list_roots(logger, paths)?;
+    let mut conn = Sqlite::new_connection(&paths.sqlite_db);
     match opts.action {
         cli::GcSubcommand::Info => {
             if opts.json {
@@ -1024,7 +1027,7 @@ pub fn op_gc(
                 }
             } else {
                 for (info, project) in to_remove {
-                    match project.remove_project() {
+                    match project.remove_project(&mut conn) {
                         Ok(()) => result.push(Ok(info)),
                         Err(e) => result.push(Err((info, e.to_string()))),
                     }

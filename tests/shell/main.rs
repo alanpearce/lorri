@@ -1,5 +1,6 @@
 use lorri::builder::OutputPath;
 use lorri::project;
+use lorri::sqlite::Sqlite;
 use lorri::{
     builder, cas::ContentAddressable, nix::options::NixOptions, ops, project::Project, AbsPathBuf,
     NixFile,
@@ -27,7 +28,22 @@ fn cargo_bin(name: &str) -> PathBuf {
 fn loads_env() {
     let tempdir = tempfile::tempdir().expect("tempfile::tempdir() failed us!");
     let cache_dir = &lorri::AbsPathBuf::new(tempdir.path().to_owned()).unwrap();
-    let project = project("loads_env", cache_dir);
+    let mut conn = Sqlite::new_connection(&cache_dir.join("sqlite"));
+    let project = {
+        let test_root = AbsPathBuf::new(PathBuf::from_iter(&[
+            env!("CARGO_MANIFEST_DIR"),
+            "tests",
+            "shell",
+            "loads_env",
+        ]))
+        .expect("CARGO_MANIFEST_DIR was not absolute");
+        Project::new_and_gc_nix_files(
+            &mut conn,
+            NixFile::from(test_root.join("shell.nix")),
+            &cache_dir.join("gc_roots"),
+        )
+        .unwrap()
+    };
 
     // Launch as a real user
     let res = Command::new(cargo_bin("lorri"))
@@ -63,21 +79,6 @@ fn loads_env() {
         String::from_utf8(output.stdout).expect("stdout not UTF-8 clean"),
         "my_env_value\n"
     );
-}
-
-fn project(name: &str, cache_dir: &AbsPathBuf) -> Project {
-    let test_root = AbsPathBuf::new(PathBuf::from_iter(&[
-        env!("CARGO_MANIFEST_DIR"),
-        "tests",
-        "shell",
-        name,
-    ]))
-    .expect("CARGO_MANIFEST_DIR was not absolute");
-    Project::new_and_gc_nix_files(
-        NixFile::from(test_root.join("shell.nix")),
-        &cache_dir.join("gc_roots"),
-    )
-    .unwrap()
 }
 
 fn build(project: &Project, cas: &ContentAddressable, logger: &slog::Logger) -> OutputPath {

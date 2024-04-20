@@ -9,6 +9,7 @@ use lorri::nix::options::NixOptions;
 use lorri::ops;
 use lorri::project;
 use lorri::project::Project;
+use lorri::sqlite::Sqlite;
 use lorri::AbsPathBuf;
 use lorri::NixFile;
 
@@ -41,8 +42,13 @@ impl DirenvTestCase {
         let shell_file = NixFile::from(AbsPathBuf::new(test_root.join("shell.nix")).unwrap());
 
         let cas = ContentAddressable::new(cachedir.join("cas").to_owned()).unwrap();
-        let project =
-            Project::new_and_gc_nix_files(shell_file.clone(), &cachedir.join("gc_roots")).unwrap();
+        let mut conn = Sqlite::new_connection(&cachedir.join("sqlite"));
+        let project = Project::new_and_gc_nix_files(
+            &mut conn,
+            shell_file.clone(),
+            &cachedir.join("gc_roots"),
+        )
+        .unwrap();
 
         DirenvTestCase {
             projectdir,

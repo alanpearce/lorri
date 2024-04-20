@@ -8,6 +8,7 @@ use crate::nix::options::NixOptions;
 use crate::ops::error::ExitError;
 use crate::socket::communicate;
 use crate::socket::path::SocketPath;
+use crate::sqlite::Sqlite;
 use crate::{project, AbsPathBuf, NixFile};
 use crossbeam_channel as chan;
 use slog::debug;
@@ -71,6 +72,7 @@ impl Daemon {
     pub fn serve(
         &mut self,
         socket_path: &SocketPath,
+        sqlite_path: &AbsPathBuf,
         gc_root_dir: &AbsPathBuf,
         cas: crate::cas::ContentAddressable,
         nix_gc_root_user_dir: project::NixGcRootUserDir,
@@ -105,12 +107,15 @@ impl Daemon {
         let tx_build_events = self.tx_build_events.clone();
         let extra_nix_options = self.extra_nix_options.clone();
         let gc_root_dir = gc_root_dir.clone();
+        let sqlite_path = sqlite_path.clone();
         pool.spawn("build-instruction-handler", move || {
+            let mut conn = Sqlite::new_connection(&sqlite_path);
             Self::build_instruction_handler(
                 tx_build_events,
                 extra_nix_options,
                 rx_activity,
                 &gc_root_dir,
+                &mut conn,
                 cas,
                 nix_gc_root_user_dir,
                 &logger3,
@@ -177,6 +182,7 @@ impl Daemon {
         extra_nix_options: NixOptions,
         rx_activity: chan::Receiver<IndicateActivity>,
         gc_root_dir: &AbsPathBuf,
+        conn: &mut Sqlite,
         cas: crate::cas::ContentAddressable,
         nix_gc_root_user_dir: project::NixGcRootUserDir,
         logger: &slog::Logger,
@@ -187,9 +193,10 @@ impl Daemon {
         // For each build instruction, add the corresponding file
         // to the watch list.
         for IndicateActivity { nix_file, rebuild } in rx_activity {
-            let project = crate::project::Project::new_and_gc_nix_files(nix_file, gc_root_dir)
-                // TODO: the project needs to create its gc root dir
-                .unwrap();
+            let project =
+                crate::project::Project::new_and_gc_nix_files(conn, nix_file, gc_root_dir)
+                    // TODO: the project needs to create its gc root dir
+                    .unwrap();
 
             let key = project.nix_file.clone();
             let project_is_watched = handler_threads.get(&key);
