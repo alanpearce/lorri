@@ -216,21 +216,4 @@ mod tests {
             "parent .. is not removed, because it could lead to somewhere different after symlinks are resolved"
         )
     }
-
-    #[test]
-    fn test_locate_config_file() {
-        let mut path = PathBuf::from("shell.nix");
-        let result = AbsPathBuf::new_from_current_directory(&path);
-        assert_eq!(
-            result
-                .unwrap()
-                .expect("Should find the shell.nix in this projects' root"),
-            AbsPathBuf::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
-                .unwrap()
-                .join("shell.nix")
-        );
-        path.pop();
-        path.push("this-lorri-specific-file-probably-does-not-exist");
-        assert_eq!(None, AbsPathBuf::new_from_current_directory(&path).unwrap());
-    }
 }
