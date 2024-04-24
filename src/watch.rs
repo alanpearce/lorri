@@ -1,13 +1,15 @@
 //! Recursively watch paths for changes, in an extensible and
 //! cross-platform way.
 
+use chan::{select, Receiver, Sender};
 use crossbeam_channel as chan;
 use notify::event::ModifyKind;
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use slog::{debug, info};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Represents if a path to watch should be watched recursively by the watcher or not
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -51,14 +53,41 @@ impl WatchPathBuf {
 /// react to changes when they occur.
 pub struct Watch {
     /// Event receiver. Process using `Watch::process`.
-    pub rx: chan::Receiver<notify::Result<notify::Event>>,
-    /// OS-based notification when any file we watched changes.
-    notify: RecommendedWatcher,
-    /// The list of files we are watching;
+    pub event_rx: chan::Receiver<Vec<PathBuf>>,
+    watch_tx: chan::Sender<Vec<WatchPathBuf>>,
+}
+
+impl Watch {
+    /// Instantiate a new Watch.
+    pub fn new(logger: slog::Logger) -> Result<Watch, notify::Error> {
+        let (ntfy_tx, notify_rx) = chan::unbounded();
+        let (event_tx, event_rx) = chan::unbounded();
+        let (watch_tx, watch_rx) = chan::unbounded();
+
+        let filter = Filter {
+            notify: Watcher::new(ntfy_tx, Config::default())?,
+            notify_rx,
+            watch_rx,
+            event_tx,
+            watches: HashSet::new(),
+            logger: logger.clone(),
+        };
+
+        thread::spawn(move || filter.run());
+
+        Ok(Watch { event_rx, watch_tx })
+    }
+
+    /// Extend the watch list with an additional list of paths.
     ///
-    /// Invariant: all paths in here should be canonicalized.
-    watches: HashSet<PathBuf>,
-    logger: slog::Logger,
+    /// Note: Watch maintains a list of already watched paths, and
+    /// will not add duplicates.
+    pub fn extend(
+        &mut self,
+        paths: Vec<WatchPathBuf>,
+    ) -> Result<(), chan::SendError<Vec<WatchPathBuf>>> {
+        self.watch_tx.send(paths)
+    }
 }
 
 /// A debug message string that can only be displayed via `Debug`.
@@ -71,17 +100,63 @@ struct FilteredOut<'a> {
     path: PathBuf,
 }
 
-impl Watch {
-    /// Instantiate a new Watch.
-    pub fn new(logger: slog::Logger) -> Result<Watch, notify::Error> {
-        let (tx, rx) = chan::unbounded();
+struct Filter {
+    notify: RecommendedWatcher,
+    notify_rx: Receiver<notify::Result<notify::Event>>,
+    watch_rx: Receiver<Vec<WatchPathBuf>>,
+    event_tx: Sender<Vec<PathBuf>>,
+    watches: HashSet<PathBuf>,
+    logger: slog::Logger,
+}
 
-        Ok(Watch {
-            notify: Watcher::new(tx, Duration::from_millis(100))?,
-            watches: HashSet::new(),
-            rx,
-            logger,
-        })
+impl Filter {
+    fn run(mut self) {
+        loop {
+            select! {
+                recv(self.notify_rx) -> msg => match msg {
+                    Ok(event) => if let Some(paths) = self.process_watch_events(event) {
+                        let paths = self.buffer_notify(paths);
+                        debug!(self.logger, "notification on watched paths"; "paths" => ?paths);
+                        if let Err(e) = self.event_tx.send(paths) {
+                            debug!(self.logger, "send error"; "error" => ?e)
+                        }
+                    },
+                    Err(chan::RecvError) => {
+                        debug!(self.logger, "filesystem notify channel was disconnected");
+                        return
+                    }
+                },
+                recv(self.watch_rx) -> msg => match msg {
+                    Ok(paths) => {
+                        let path_log = format!("{:?}", paths);
+                        if let Err(e) = self.extend(paths) {
+                                debug!(self.logger, "error extending watch paths:"; "error" => ?e, "paths" => path_log)
+                        }
+                    },
+                    Err(chan::RecvError) => {
+                        debug!(self.logger, "watch extension channel was disconnected");
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    fn buffer_notify(&self, mut touched: Vec<PathBuf>) -> Vec<PathBuf> {
+        let until = Instant::now() + Duration::from_millis(200);
+        loop {
+            match self.notify_rx.recv_deadline(until) {
+                Ok(event) => {
+                    if let Some(mut paths) = self.process_watch_events(event) {
+                        touched.append(&mut paths);
+                    }
+                }
+                Err(_) => {
+                    touched.dedup();
+                    return touched;
+                }
+            }
+        }
     }
 
     /// Process `notify::Event`s coming in via `Watch::rx`.
@@ -89,15 +164,11 @@ impl Watch {
     /// Returns a list of „interesting“ paths.
     ///
     /// `None` if there were no relevant changes.
-    pub fn process_watch_events(
-        &self,
-        event: notify::Result<notify::Event>,
-    ) -> Option<Vec<PathBuf>> {
+    fn process_watch_events(&self, event: notify::Result<notify::Event>) -> Option<Vec<PathBuf>> {
         match event {
             Ok(event) => {
                 {
                     let event = &event;
-                    debug!(self.logger, "Watch Event: {:#?}", event);
                     match &event.kind {
                         notify::event::EventKind::Remove(_) if !event.paths.is_empty() => {
                             info!(self.logger, "identified removal: {:?}", &event.paths);
@@ -140,7 +211,43 @@ impl Watch {
             }
         }
     }
+    /// Determine if the event path is covered by our list of watched
+    /// paths.
+    ///
+    /// Returns true if:
+    ///   - the event's path directly names a path in our
+    ///     watch list
+    ///   - the event's path names a canonicalized path in our watch list
+    ///   - the event's path's parent directly names a path in our watch
+    ///     list
+    ///   - the event's path's parent names a canonicalized path in our
+    ///     watch list
+    fn path_match(&self, event_path: &Path) -> bool {
+        let event_parent = event_path.parent();
 
+        self.watches.iter().any(|watched: &PathBuf| {
+            if event_path == watched {
+                debug!(
+                self.logger,
+                "event path directly matches watched path";
+                "event_path" => event_path.to_str());
+
+                return true;
+            }
+
+            if let Some(parent) = event_parent {
+                if parent == watched {
+                    debug!(
+                    self.logger,
+                    "event path parent matches watched path";
+                    "event_path" => event_path.to_str(), "parent_path" => parent.to_str());
+                    return true;
+                }
+            }
+
+            false
+        })
+    }
     /// Extend the watch list with an additional list of paths.
     ///
     /// Note: Watch maintains a list of already watched paths, and
@@ -186,44 +293,6 @@ impl Watch {
             }
         }
         Ok(())
-    }
-
-    /// Determine if the event path is covered by our list of watched
-    /// paths.
-    ///
-    /// Returns true if:
-    ///   - the event's path directly names a path in our
-    ///     watch list
-    ///   - the event's path names a canonicalized path in our watch list
-    ///   - the event's path's parent directly names a path in our watch
-    ///     list
-    ///   - the event's path's parent names a canonicalized path in our
-    ///     watch list
-    fn path_match(&self, event_path: &Path) -> bool {
-        let event_parent = event_path.parent();
-
-        self.watches.iter().any(|watched: &PathBuf| {
-            if event_path == watched {
-                debug!(
-                self.logger,
-                "event path directly matches watched path";
-                "event_path" => event_path.to_str());
-
-                return true;
-            }
-
-            if let Some(parent) = event_parent {
-                if parent == watched {
-                    debug!(
-                    self.logger,
-                    "event path parent matches watched path";
-                    "event_path" => event_path.to_str(), "parent_path" => parent.to_str());
-                    return true;
-                }
-            }
-
-            false
-        })
     }
 }
 
@@ -356,17 +425,17 @@ mod tests {
         F: Fn(&PathBuf) -> bool,
     {
         let start = time::Instant::now();
-        let mut rest = timeout.clone();
+        let mut rest = timeout;
         let mut seen: Vec<PathBuf> = vec![];
         let mut i = 0;
         loop {
             println!("loop {} rest: {}ms, seen: {:?}", i, rest.as_millis(), seen);
-            i = i + 1;
-            let recv = watch.rx.recv_timeout(rest);
-            println!("recv: {:#?}", recv);
-            let files = recv
-                .map_or(None, |e| watch.process_watch_events(e))
-                .unwrap_or(vec![]);
+            i += 1;
+            let files = watch
+                .event_rx
+                .recv_timeout(rest)
+                .expect("working notify in tests");
+            println!("files: {:#?}", files);
             seen.extend(files.clone());
             for f in files {
                 if pred(&f) {
@@ -384,9 +453,9 @@ mod tests {
 
     /// Assert no watcher event happens until the timeout
     fn assert_none_within(watch: &Watch, timeout: Duration) {
-        let res = watch.rx.recv_timeout(timeout);
+        let res = watch.event_rx.recv_timeout(timeout);
         match res {
-            Err(_) => return,
+            Err(_) => (),
             Ok(watch_result) => {
                 panic!(
                     "expected no file change notification for; but these files changed: {:?}",
@@ -509,37 +578,38 @@ mod tests {
         })
     }
 
-    // TODO: this test is bugged, but in order to figure out what is wrong, we should add some sort of provenance to our watcher filter functions first.
-    // #[test]
-    // fn rename_over_vim() {
-    //     // Vim renames files in to place for atomic writes
-    //     let mut watcher = Watch::new(crate::logging::test_logger()).expect("failed creating Watch");
+    // TODO: this test is bugged, but in order to figure out what is wrong,
+    // we should add some sort of provenance to our watcher filter functions first.
+    #[test]
+    fn rename_over_vim() {
+        // Vim renames files in to place for atomic writes
+        let mut watcher = Watch::new(crate::logging::test_logger()).expect("failed creating Watch");
 
-    //     with_test_tempdir(|t| {
-    //         expect_bash(r#"mkdir -p "$1""#, [t]);
-    //         expect_bash(r#"touch "$1/foo""#, [t]);
-    //         watcher
-    //             .extend(vec![WatchPathBuf::Recursive(t.join("foo"))])
-    //             .unwrap();
-    //         macos_eat_late_notifications(&mut watcher);
+        with_test_tempdir(|t| {
+            expect_bash(r#"mkdir -p "$1""#, [t]);
+            expect_bash(r#"touch "$1/foo""#, [t]);
+            watcher
+                .extend(vec![WatchPathBuf::Recursive(t.join("foo"))])
+                .unwrap();
+            macos_eat_late_notifications(&mut watcher);
 
-    //         // bar is not watched, expect error
-    //         expect_bash(r#"echo 1 > "$1/bar""#, [t]);
-    //         assert_none_within(&watcher, WATCHER_TIMEOUT);
+            // bar is not watched, expect error
+            expect_bash(r#"echo 1 > "$1/bar""#, [t]);
+            assert_none_within(&watcher, WATCHER_TIMEOUT);
 
-    //         // Rename bar to foo, expect a notification
-    //         expect_bash(r#"mv "$1/bar" "$1/foo""#, [t]);
-    //         assert_file_changed_within(&watcher, "foo", WATCHER_TIMEOUT);
+            // Rename bar to foo, expect a notification
+            expect_bash(r#"mv "$1/bar" "$1/foo""#, [t]);
+            assert_file_changed_within(&watcher, "foo", WATCHER_TIMEOUT);
 
-    //         // Do it a second time
-    //         expect_bash(r#"echo 1 > "$1/bar""#, [t]);
-    //         assert_none_within(&watcher, WATCHER_TIMEOUT);
+            // Do it a second time
+            expect_bash(r#"echo 1 > "$1/bar""#, [t]);
+            assert_none_within(&watcher, WATCHER_TIMEOUT);
 
-    //         // Rename bar to foo, expect a notification
-    //         expect_bash(r#"mv "$1/bar" "$1/foo""#, [t]);
-    //         assert_file_changed_within(&watcher, "foo", WATCHER_TIMEOUT);
-    //     })
-    // }
+            // Rename bar to foo, expect a notification
+            expect_bash(r#"mv "$1/bar" "$1/foo""#, [t]);
+            assert_file_changed_within(&watcher, "foo", WATCHER_TIMEOUT);
+        })
+    }
 
     #[test]
     fn walk_path_topo_filetree() {

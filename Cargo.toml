@@ -15,9 +15,9 @@ edition = "2021"
 # before updating dependencies: we want to keep the rustc compatible with 1.41.0 for now (start of 2020).
 [dependencies]
 # central features
-notify = "= 5.0.0-pre.1"
+notify = "6.0.0"
 atomicwrites = "0.2.5"
-crossbeam-channel = "0.3.8"
+crossbeam-channel = "0.5.12"
 nix = "0.20.0"
 regex = "1.4.3"
 tempfile = "3.1.0"

@@ -201,7 +201,7 @@ impl<'a> BuildLoop<'a> {
         rx_ping: chan::Receiver<()>,
     ) -> crate::Never {
         let mut current_build = BuildState::NotRunning;
-        let rx_watcher = self.watch.rx.clone();
+        let rx_watcher = self.watch.event_rx.clone();
 
         loop {
             debug!(self.logger, "looping build_loop";
@@ -247,19 +247,13 @@ impl<'a> BuildLoop<'a> {
 
                 // watcher found file change
                 recv(rx_watcher) -> msg => match msg {
-                    Ok(msg) => {
-                        match self.watch.process_watch_events(msg) {
-                            Some(changed) => {
-                                // TODO: this is not a started, this is just a scheduled!
-                                send_event(Event::Started {
-                                    nix_file: self.project.nix_file.clone(),
-                                    reason: Reason::FilesChanged(changed)
-                                });
-                                self.start_or_schedule_build(&mut current_build)
-                            },
-                            // No relevant file events
-                            None => {}
-                        }
+                    Ok(changed) => {
+                            // TODO: this is not a started, this is just a scheduled!
+                            send_event(Event::Started {
+                                nix_file: self.project.nix_file.clone(),
+                                reason: Reason::FilesChanged(changed)
+                            });
+                            self.start_or_schedule_build(&mut current_build)
                     },
                     Err(chan::RecvError) =>
                         debug!(self.logger, "notify chan was disconnected"; "project" => &self.project.nix_file)
@@ -340,7 +334,9 @@ impl<'a> BuildLoop<'a> {
         debug!(self.logger, "paths reduced"; "from" => original_paths_len, "to" => paths.len());
 
         // add all new (reduced) nix sources to the input source watchlist
-        self.watch.extend(paths.into_iter().collect::<Vec<_>>())?;
+        self.watch
+            .extend(paths.into_iter().collect::<Vec<_>>())
+            .map_err(BuildError::io)?;
 
         // root the result
         self.project
