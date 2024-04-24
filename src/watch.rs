@@ -511,7 +511,7 @@ mod tests {
         // Note, this is racey in the kernel. Otherwise I'd assert
         // this is empty.
         sleep(WATCHER_TIMEOUT);
-        watcher.rx.try_iter();
+        watcher.event_rx.try_iter();
     }
 
     #[cfg(not(target_os = "macos"))]
